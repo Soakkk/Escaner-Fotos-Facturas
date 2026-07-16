@@ -31,6 +31,7 @@ Aplicación de escritorio para Windows que convierte fotos de documentos hechas 
 | 💾 JPG | Calidad 95% |
 | 🖼️ PNG | Sin pérdida de calidad |
 | 📄 PDF | Página única o multipágina; los B/N se incrustan a 1 bit (CCITT G4): ocupan decenas de KB |
+| 📤 Enviar a Aplifisa | Guarda el lote en PDF y abre automáticamente Facturas a Aplifisa con `--import`, sin volver a elegir el archivo |
 | ↕️ Drag & drop | Arrastra una o varias fotos directamente sobre la ventana |
 | 📱 HEIC | Abre fotos de iPhone (HEIC/HEIF) |
 
@@ -75,6 +76,15 @@ Doble clic en `EscanerFotos.bat`.
 
 1. Procesa cada página y pulsa **➕ Añadir** para ir añadiéndolas a la lista del PDF.
 2. Cuando tengas todas, pulsa **Exportar el PDF**.
+
+### Enviar el lote a Facturas a Aplifisa
+
+1. Prepara las fotos y añádelas al lote en el orden correcto.
+2. Pulsa **Enviar lote a Facturas a Aplifisa**, siempre visible al pie del panel central.
+3. Elige dónde guardar el PDF. La primera vez, si no se detecta automáticamente,
+   selecciona `FacturasAplifisa.exe`.
+4. La aplicación fiscal se abre con el PDF ya cargado para extraer, revisar y
+   exportar los datos.
 
 ### DNI: las dos caras en una sola hoja
 

@@ -7,6 +7,11 @@ tipo escáner: enderezadas, recortadas y con el texto legible.
 
 Sin IA. Basado en OpenCV.
 
+v2.11 — Novedades:
+  • Flujo visual compartido con Generador de avisos fiscales
+  • Botón fijo «Enviar lote a Facturas a Aplifisa»
+  • Panel central simplificado por pasos y opciones secundarias plegadas
+
 v2.10 — Novedades:
   • Panel reordenado: lo más usado arriba (recortar/enderezar, girar,
     tipo, ajuste fino); lo poco habitual en «Más opciones»
@@ -38,7 +43,7 @@ import numpy as np
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QPushButton, QLabel,
     QVBoxLayout, QHBoxLayout, QFileDialog, QSlider, QComboBox,
-    QMessageBox, QGroupBox, QSizePolicy, QScrollArea,
+    QMessageBox, QFrame, QGroupBox, QSizePolicy, QScrollArea,
     QListWidget, QListWidgetItem, QLineEdit, QCheckBox
 )
 from PySide6.QtGui import (
@@ -58,6 +63,7 @@ from imagen import (
     componer_dni,
 )
 from cola import siguiente_de_cola, texto_cola
+from integracion_aplifisa import lanzar_aplifisa, localizar_aplifisa
 
 
 def _rutas_imagen_de(mime):
@@ -641,9 +647,36 @@ class VentanaPrincipal(QMainWindow):
     def _crear_interfaz(self):
         central = QWidget()
         self.setCentralWidget(central)
-        layout = QHBoxLayout(central)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(10)
+        raiz = QVBoxLayout(central)
+        raiz.setContentsMargins(0, 0, 0, 0)
+        raiz.setSpacing(0)
+
+        cabecera = QFrame()
+        cabecera.setObjectName("cabecera")
+        cabecera.setFixedHeight(82)
+        lc = QHBoxLayout(cabecera)
+        lc.setContentsMargins(22, 12, 22, 12)
+        marca = QVBoxLayout()
+        titulo = QLabel("Escáner de facturas")
+        titulo.setObjectName("marca")
+        subtitulo = QLabel("Prepare las fotos y envíe el lote directamente a Aplifisa")
+        subtitulo.setObjectName("marcaSubtitulo")
+        marca.addWidget(titulo)
+        marca.addWidget(subtitulo)
+        lc.addLayout(marca)
+        lc.addStretch()
+        for texto, activo in (("1  Cargar", True), ("2  Preparar", False),
+                              ("3  Enviar", False)):
+            paso = QLabel(texto)
+            paso.setObjectName("pasoActivo" if activo else "pasoInactivo")
+            lc.addWidget(paso)
+        raiz.addWidget(cabecera)
+
+        contenido = QWidget()
+        layout = QHBoxLayout(contenido)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(12)
+        raiz.addWidget(contenido, 1)
 
         # Columna izquierda: original
         col_izq = QVBoxLayout()
@@ -664,9 +697,17 @@ class VentanaPrincipal(QMainWindow):
         scroll_ctrl.setWidgetResizable(True)
         scroll_ctrl.setWidget(w_ctrl)
         scroll_ctrl.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll_ctrl.setMinimumWidth(330)
-        scroll_ctrl.setMaximumWidth(370)
+        scroll_ctrl.setMinimumWidth(360)
+        scroll_ctrl.setMaximumWidth(410)
         scroll_ctrl.setFrameShape(QScrollArea.Shape.NoFrame)
+        centro = QWidget()
+        centro_layout = QVBoxLayout(centro)
+        centro_layout.setContentsMargins(0, 0, 0, 0)
+        centro_layout.setSpacing(8)
+        centro_layout.addWidget(scroll_ctrl, 1)
+        centro_layout.addWidget(self.btn_enviar_aplifisa)
+        centro.setMinimumWidth(360)
+        centro.setMaximumWidth(410)
 
         # Columna derecha: resultado
         col_der = QVBoxLayout()
@@ -679,15 +720,23 @@ class VentanaPrincipal(QMainWindow):
         w_der.setLayout(col_der)
 
         layout.addWidget(w_izq, 4)
-        layout.addWidget(scroll_ctrl, 0)
+        layout.addWidget(centro, 0)
         layout.addWidget(w_der, 4)
 
     def _construir_panel_controles(self):
         panel = QVBoxLayout()
-        panel.setSpacing(6)
+        panel.setSpacing(8)
+
+        titulo = QLabel("Flujo de trabajo")
+        titulo.setObjectName("tituloPanel")
+        ayuda = QLabel("Siga los pasos de arriba abajo. Las opciones menos usadas están plegadas.")
+        ayuda.setObjectName("subtituloPanel")
+        ayuda.setWordWrap(True)
+        panel.addWidget(titulo)
+        panel.addWidget(ayuda)
 
         # === Cargar ===
-        g1 = QGroupBox("Cargar")
+        g1 = QGroupBox("1 · Entrada")
         l1 = QVBoxLayout(g1)
         btn_abrir = QPushButton("📂  Abrir fotos…  (Ctrl+O)")
         btn_abrir.setMinimumHeight(38)
@@ -733,7 +782,7 @@ class VentanaPrincipal(QMainWindow):
         panel.addWidget(self.grupo_cola)
 
         # === Recortar y enderezar (incluye rotación) ===
-        g2 = QGroupBox("Recortar y enderezar")
+        g2 = QGroupBox("2 · Preparar documento")
         l2 = QVBoxLayout(g2)
         btn_auto = QPushButton("🔍  Detectar el documento  (F5)")
         btn_auto.setMinimumHeight(38)
@@ -766,7 +815,7 @@ class VentanaPrincipal(QMainWindow):
         panel.addWidget(g2)
 
         # === Tipo de salida ===
-        g3 = QGroupBox("Tipo (B/N o color)")
+        g3 = QGroupBox("3 · Acabado")
         l3 = QVBoxLayout(g3)
         self.combo_filtro = QComboBox()
         self.combo_filtro.addItems([
@@ -797,15 +846,16 @@ class VentanaPrincipal(QMainWindow):
         l4.addWidget(btn_reset)
         panel.addWidget(self._grupo_plegable("Ajustes finos", cont_aj, abierto=False))
 
-        self.btn_terminar = QPushButton("Añadir al PDF y pasar a la siguiente")
+        self.btn_terminar = QPushButton("Añadir página y continuar")
         self.btn_terminar.setObjectName("btnPrimario")
         self.btn_terminar.setMinimumHeight(46)
         self.btn_terminar.clicked.connect(self.terminar_y_siguiente)
         panel.addWidget(self.btn_terminar)
 
         # === Guardar ===
-        g5 = QGroupBox("Guardar")
+        g5 = QWidget()
         l5 = QVBoxLayout(g5)
+        l5.setContentsMargins(0, 0, 0, 0)
 
         # Prefijo del nombre de archivo: 'Perez_2026-06-10_14-33-12.jpg'
         fila_pref = QHBoxLayout()
@@ -849,10 +899,8 @@ class VentanaPrincipal(QMainWindow):
         btn_pdf.setMinimumHeight(36)
         btn_pdf.clicked.connect(lambda: self.guardar("pdf"))
         l5.addWidget(btn_pdf)
-        panel.addWidget(g5)
-
         # === PDF de varias fotos (miniaturas reordenables) ===
-        g6 = QGroupBox("PDF de varias fotos")
+        g6 = QGroupBox("4 · Lote y salida")
         l6 = QVBoxLayout(g6)
         self.lista_pdf = QListWidget()
         self.lista_pdf.setViewMode(QListWidget.ViewMode.IconMode)
@@ -885,7 +933,16 @@ class VentanaPrincipal(QMainWindow):
         btn_exp_pdf.setMinimumHeight(36)
         btn_exp_pdf.clicked.connect(self.exportar_pdf_multipagina)
         l6.addWidget(btn_exp_pdf)
+        self.btn_enviar_aplifisa = QPushButton("Enviar lote a Facturas a Aplifisa")
+        self.btn_enviar_aplifisa.setObjectName("btnEnviar")
+        self.btn_enviar_aplifisa.setMinimumHeight(46)
+        self.btn_enviar_aplifisa.setToolTip(
+            "Guarda el PDF y abre Facturas a Aplifisa con el lote ya cargado.")
+        self.btn_enviar_aplifisa.clicked.connect(self.enviar_a_aplifisa)
         panel.addWidget(g6)
+
+        panel.addWidget(self._grupo_plegable(
+            "Otros formatos y guardado rápido", g5, abierto=False))
 
         # === Más opciones (lo poco habitual, plegado) ===
         cont_mas = QWidget()
@@ -1164,7 +1221,7 @@ class VentanaPrincipal(QMainWindow):
     def _al_cambiar_filtro(self, idx):
         self.settings.setValue("filtro_idx2", idx)
         # La intensidad solo aplica a los dos modos B/N
-        self.cont_intensidad.setVisible(idx <= 2)
+        self.cont_intensidad.setVisible(idx <= 1)
         self.actualizar_procesado()
 
     # ----------------------------------------------------------
@@ -1355,32 +1412,84 @@ class VentanaPrincipal(QMainWindow):
         self.lista_pdf.clear()
         self._actualizar_barra_estado()
 
+    def _elegir_ruta_pdf_lote(self):
+        nombre_def = (self._prefijo_limpio() or "facturas") + ".pdf"
+        carpeta_def = self.carpeta_salida or self._ruta_origen
+        ruta, _ = QFileDialog.getSaveFileName(
+            self, "Guardar lote de facturas",
+            os.path.join(carpeta_def, nombre_def), "PDF (*.pdf)")
+        if ruta and not ruta.lower().endswith(".pdf"):
+            ruta += ".pdf"
+        return ruta
+
+    def _guardar_pdf_lote(self, ruta):
+        paginas = [
+            pagina_a_pil_pdf(
+                self.lista_pdf.item(i).data(Qt.ItemDataRole.UserRole))
+            for i in range(self.lista_pdf.count())
+        ]
+        paginas[0].save(ruta, "PDF", resolution=200.0,
+                        save_all=True, append_images=paginas[1:])
+        return len(paginas)
+
     def exportar_pdf_multipagina(self):
         if not self.lista_pdf.count():
             QMessageBox.warning(self, "Atención",
                 "No hay páginas. Añade con «➕ Añadir».")
             return
-        nombre_def = (self._prefijo_limpio() or "documento") + ".pdf"
-        carpeta_def = self.carpeta_salida or self._ruta_origen
-        ruta, _ = QFileDialog.getSaveFileName(
-            self, "Exportar PDF",
-            os.path.join(carpeta_def, nombre_def), "PDF (*.pdf)")
+        ruta = self._elegir_ruta_pdf_lote()
         if not ruta:
             return
-        if not ruta.lower().endswith(".pdf"):
-            ruta += ".pdf"
         try:
-            paginas = [
-                pagina_a_pil_pdf(
-                    self.lista_pdf.item(i).data(Qt.ItemDataRole.UserRole))
-                for i in range(self.lista_pdf.count())
-            ]
-            paginas[0].save(ruta, "PDF", resolution=200.0,
-                            save_all=True, append_images=paginas[1:])
+            total = self._guardar_pdf_lote(ruta)
             QMessageBox.information(self, "Exportado",
-                f"PDF de {len(paginas)} páginas guardado en:\n{ruta}")
+                f"PDF de {total} páginas guardado en:\n{ruta}")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"No se pudo exportar el PDF:\n{e}")
+
+    def _ejecutable_aplifisa(self):
+        configurado = self.settings.value("ruta_aplifisa", "", str)
+        ejecutable = localizar_aplifisa(configurado)
+        if ejecutable:
+            return ejecutable
+        ruta, _ = QFileDialog.getOpenFileName(
+            self, "Localiza FacturasAplifisa.exe", "",
+            "Facturas a Aplifisa (FacturasAplifisa.exe);;Ejecutables (*.exe)")
+        if ruta:
+            self.settings.setValue("ruta_aplifisa", ruta)
+            return ruta
+        return None
+
+    def enviar_a_aplifisa(self):
+        """Guarda el lote y abre la app fiscal con --import <pdf>."""
+        if not self.lista_pdf.count():
+            if self.procesada_full() is None:
+                QMessageBox.warning(
+                    self, "Lote vacío",
+                    "Abra una foto y añádala al lote antes de enviarlo.")
+                return
+            self.anadir_pagina_pdf()
+        ruta = self._elegir_ruta_pdf_lote()
+        if not ruta:
+            return
+        try:
+            total = self._guardar_pdf_lote(ruta)
+            ejecutable = self._ejecutable_aplifisa()
+            if not ejecutable:
+                self.statusBar().showMessage(
+                    "PDF guardado; falta localizar FacturasAplifisa.exe", 7000)
+                return
+            lanzar_aplifisa(ejecutable, ruta)
+            self.statusBar().showMessage(
+                f"Lote de {total} páginas enviado a Facturas a Aplifisa", 7000)
+            QMessageBox.information(
+                self, "Lote enviado",
+                "El PDF se ha guardado y Facturas a Aplifisa se está abriendo "
+                "con el lote preparado para analizar.")
+        except Exception as e:
+            QMessageBox.critical(
+                self, "No se pudo enviar",
+                f"El PDF no se pudo enviar a Facturas a Aplifisa:\n{e}")
 
 # =============================================================
 # ==========================   MAIN   =========================

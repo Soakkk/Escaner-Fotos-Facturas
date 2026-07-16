@@ -1,10 +1,4 @@
-"""Tema visual de EscanerFotos: paleta, hoja de estilos Qt (QSS) y recursos.
-
-Criterios: superficies neutras oscuras, un único color de acento (azul) para
-las acciones primarias y la selección, verde solo para el guardado rápido,
-y los mismos estados (normal/hover/pulsado/foco/deshabilitado) en todos los
-controles. El tema sirve a la tarea; no decora.
-"""
+"""Sistema visual claro inspirado en el Generador de avisos fiscales."""
 
 import os
 import sys
@@ -13,27 +7,27 @@ from PySide6.QtGui import QPalette, QColor
 
 # ---- Paleta -------------------------------------------------------------
 
-FONDO = "#1e2227"            # ventana
-PANEL = "#262b31"            # grupos y paneles
-CONTROL = "#2e343b"          # botones, inputs
-CONTROL_HOVER = "#363d45"
-CONTROL_PULSADO = "#2a3037"
-BORDE = "#3a4149"
-LIENZO = "#15181c"           # visores de imagen
-TEXTO = "#e8eaed"
-TEXTO_SUAVE = "#a5aeb7"
-TEXTO_DESACTIVADO = "#6c757e"
+FONDO = "#F7F6F3"
+PANEL = "#FFFFFF"
+CONTROL = "#FFFFFF"
+CONTROL_HOVER = "#F4F8FB"
+CONTROL_PULSADO = "#E8EFF6"
+BORDE = "#D8E0E7"
+LIENZO = "#EEF2F5"
+TEXTO = "#1E293B"
+TEXTO_SUAVE = "#64748B"
+TEXTO_DESACTIVADO = "#A3AAB3"
 
-ACENTO = "#3c83f6"           # acción primaria / selección / foco
-ACENTO_HOVER = "#5b97f7"
-ACENTO_PULSADO = "#2f6bd0"
-EXITO = "#2f9e5b"            # guardado rápido
-EXITO_HOVER = "#3bb46c"
-EXITO_PULSADO = "#27854c"
+ACENTO = "#0B3159"
+ACENTO_HOVER = "#082745"
+ACENTO_PULSADO = "#061F38"
+EXITO = "#2E6B43"
+EXITO_HOVER = "#255738"
+EXITO_PULSADO = "#1D472E"
 
 # Colores para texto enriquecido (setText con HTML) coherentes con el tema
 HTML_SUAVE = TEXTO_SUAVE
-HTML_OK = "#5fc88a"
+HTML_OK = "#2E6B43"
 
 
 def ruta_recurso(nombre):
@@ -62,7 +56,7 @@ QMainWindow, QDialog, QMessageBox, QProgressDialog, QFileDialog {{
 QGroupBox {{
     background: {PANEL};
     border: 1px solid {BORDE};
-    border-radius: 8px;
+    border-radius: 10px;
     margin-top: 12px;
     padding: 10px 10px 8px 10px;
     font-weight: 600;
@@ -92,7 +86,7 @@ QPushButton {{
 QPushButton:hover {{ background: {CONTROL_HOVER}; border-color: #485058; }}
 QPushButton:pressed {{ background: {CONTROL_PULSADO}; }}
 QPushButton:focus {{ border-color: {ACENTO}; }}
-QPushButton:disabled {{ color: {TEXTO_DESACTIVADO}; background: {PANEL}; }}
+QPushButton:disabled {{ color: {TEXTO_DESACTIVADO}; background: #F1F3F5; }}
 
 QPushButton#btnPrimario {{
     background: {ACENTO};
@@ -122,7 +116,7 @@ QComboBox, QLineEdit {{
     padding: 6px 8px;
     selection-background-color: {ACENTO};
 }}
-QComboBox:hover, QLineEdit:hover {{ border-color: #485058; }}
+QComboBox:hover, QLineEdit:hover {{ border-color: #9DB3CF; }}
 QComboBox:focus, QLineEdit:focus {{ border-color: {ACENTO}; }}
 QComboBox QAbstractItemView {{
     background: {PANEL};
@@ -137,7 +131,7 @@ QCheckBox::indicator, QGroupBox::indicator {{
     width: 15px;
     height: 15px;
     border-radius: 4px;
-    border: 1px solid #4a525b;
+    border: 1px solid #AAB6C2;
     background: {CONTROL};
 }}
 QCheckBox::indicator:hover, QGroupBox::indicator:hover {{
@@ -157,13 +151,13 @@ QSlider::groove:horizontal {{
 }}
 QSlider::sub-page:horizontal {{ background: {ACENTO}; border-radius: 2px; }}
 QSlider::handle:horizontal {{
-    background: {TEXTO};
+    background: {ACENTO};
     width: 14px;
     height: 14px;
     margin: -5px 0;
     border-radius: 7px;
 }}
-QSlider::handle:horizontal:hover {{ background: white; }}
+QSlider::handle:horizontal:hover {{ background: {ACENTO_HOVER}; }}
 
 /* ---- Lista de páginas del PDF ---- */
 QListWidget {{
@@ -180,18 +174,18 @@ QScrollArea {{ border: none; background: transparent; }}
 QScrollArea > QWidget > QWidget {{ background: transparent; }}
 QScrollBar:vertical {{ background: transparent; width: 10px; margin: 2px; }}
 QScrollBar::handle:vertical {{
-    background: #3f4750;
+    background: #B9C3CD;
     border-radius: 4px;
     min-height: 30px;
 }}
-QScrollBar::handle:vertical:hover {{ background: #4d5660; }}
+QScrollBar::handle:vertical:hover {{ background: #97A6B5; }}
 QScrollBar:horizontal {{ background: transparent; height: 10px; margin: 2px; }}
 QScrollBar::handle:horizontal {{
-    background: #3f4750;
+    background: #B9C3CD;
     border-radius: 4px;
     min-width: 30px;
 }}
-QScrollBar::handle:horizontal:hover {{ background: #4d5660; }}
+QScrollBar::handle:horizontal:hover {{ background: #97A6B5; }}
 QScrollBar::add-line, QScrollBar::sub-line {{ width: 0; height: 0; }}
 QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
 
@@ -206,7 +200,7 @@ QProgressBar {{
 QProgressBar::chunk {{ background: {ACENTO}; border-radius: 5px; }}
 
 /* ---- Barra de estado y tooltips ---- */
-QStatusBar {{ background: #181c20; color: {TEXTO_SUAVE}; }}
+QStatusBar {{ background: {PANEL}; color: {TEXTO_SUAVE}; border-top: 1px solid {BORDE}; }}
 QStatusBar::item {{ border: none; }}
 QToolTip {{
     background: {PANEL};
@@ -220,7 +214,7 @@ QLabel {{ background: transparent; }}
 QLabel#lienzo {{
     background: {LIENZO};
     border: 1px solid {BORDE};
-    border-radius: 8px;
+    border-radius: 10px;
 }}
 QLabel#tituloLienzo {{
     color: {TEXTO_SUAVE};
@@ -230,12 +224,27 @@ QLabel#tituloLienzo {{
 }}
 QLabel#infoSuave {{ color: {TEXTO_SUAVE}; font-size: 11px; }}
 QLabel#indicadorCola {{
-    background: #1d3a2a;
-    color: #7fe0a7;
+    background: #EAF3EC;
+    color: #23603B;
     padding: 6px 8px;
     border-radius: 6px;
     font-weight: 600;
 }}
+QFrame#cabecera {{ background: {ACENTO}; border: none; }}
+QLabel#marca {{ color: white; font-size: 20px; font-weight: 700; }}
+QLabel#marcaSubtitulo {{ color: #C9D8E8; font-size: 11px; }}
+QLabel#pasoActivo {{
+    background: #E8F0F8; color: {ACENTO}; border: 1px solid #BFD0E2;
+    border-radius: 14px; padding: 6px 10px; font-weight: 700;
+}}
+QLabel#pasoInactivo {{ color: #D9E3ED; padding: 6px 8px; }}
+QLabel#tituloPanel {{ color: {ACENTO}; font-size: 17px; font-weight: 700; }}
+QLabel#subtituloPanel {{ color: {TEXTO_SUAVE}; font-size: 11px; }}
+QPushButton#btnEnviar {{
+    background: {ACENTO}; color: white; border: none;
+    font-size: 14px; font-weight: 700;
+}}
+QPushButton#btnEnviar:hover {{ background: {ACENTO_HOVER}; }}
 """
 
 

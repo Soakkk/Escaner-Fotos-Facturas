@@ -158,12 +158,13 @@ def test_quitar_imagen_vacia_la_foto_y_conserva_el_pdf():
     assert v.btn_quitar.isEnabled()
 
 
-def test_intensidad_visible_en_modos_bn_y_color():
+def test_intensidad_visible_solo_en_modos_bn():
     # isHidden() refleja el setVisible directamente (la ventana no se llega a
     # mostrar en el test offscreen, por eso no se usa isVisible()).
     v = ef.VentanaPrincipal()
-    for idx in (0, 1, 2):                      # B/N nítido, B/N puro, Color limpio
+    for idx in (0, 1):                         # B/N nítido y B/N puro
         v.combo_filtro.setCurrentIndex(idx)
         assert not v.cont_intensidad.isHidden()
-    v.combo_filtro.setCurrentIndex(3)          # Color original: sin intensidad
-    assert v.cont_intensidad.isHidden()
+    for idx in (2, 3):                         # Modos de color: sin intensidad B/N
+        v.combo_filtro.setCurrentIndex(idx)
+        assert v.cont_intensidad.isHidden()
