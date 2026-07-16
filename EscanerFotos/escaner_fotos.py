@@ -7,6 +7,9 @@ tipo escáner: enderezadas, recortadas y con el texto legible.
 
 Sin IA. Basado en OpenCV.
 
+v2.12 — Novedades:
+  • Nuevo icono propio para distinguir la aplicación en Windows
+
 v2.11 — Novedades:
   • Flujo visual compartido con Generador de avisos fiscales
   • Botón fijo «Enviar lote a Facturas a Aplifisa»
@@ -656,6 +659,12 @@ class VentanaPrincipal(QMainWindow):
         cabecera.setFixedHeight(82)
         lc = QHBoxLayout(cabecera)
         lc.setContentsMargins(22, 12, 22, 12)
+        logo = QLabel()
+        logo.setPixmap(QPixmap(estilo.ruta_recurso("icono.png")).scaled(
+            48, 48, Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation))
+        logo.setFixedSize(52, 52)
+        lc.addWidget(logo)
         marca = QVBoxLayout()
         titulo = QLabel("Escáner de facturas")
         titulo.setObjectName("marca")

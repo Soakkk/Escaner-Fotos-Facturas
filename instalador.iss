@@ -31,4 +31,5 @@ Name: "{autodesktop}\EscanerFotos"; Filename: "{app}\{#MyAppExe}"
 Name: "{userprograms}\EscanerFotos"; Filename: "{app}\{#MyAppExe}"
 
 [Run]
-Filename: "{app}\{#MyAppExe}"; Description: "Abrir EscanerFotos"; Flags: nowait postinstall
+Filename: "{app}\{#MyAppExe}"; Description: "Abrir EscanerFotos"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExe}"; Flags: nowait skipifnotsilent
