@@ -18,7 +18,7 @@ from actualizador_core import (
     es_mas_nueva, elegir_asset_exe, elegir_asset_sha256, parsear_sha256,
 )
 
-API_URL = "https://api.github.com/repos/Soakkk/EscanerFotos/releases/latest"
+API_URL = "https://api.github.com/repos/Soakkk/Escaner-Fotos-Facturas/releases/latest"
 
 
 def esta_empaquetada():

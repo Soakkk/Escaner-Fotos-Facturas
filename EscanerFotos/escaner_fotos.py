@@ -7,7 +7,7 @@ tipo escáner: enderezadas, recortadas y con el texto legible.
 
 Sin IA. Basado en OpenCV.
 
-v2.12 — Novedades:
+v2.13 — Novedades:
   • Nuevo icono propio para distinguir la aplicación en Windows
 
 v2.11 — Novedades:
@@ -371,7 +371,7 @@ class VentanaPrincipal(QMainWindow):
             self.combo_filtro.blockSignals(True)
             self.combo_filtro.setCurrentIndex(idx)
             self.combo_filtro.blockSignals(False)
-        self.cont_intensidad.setVisible(idx <= 2)
+        self.cont_intensidad.setVisible(idx <= 1)
         self.txt_prefijo.setText(self.settings.value("prefijo", "", str))
         self._actualizar_label_carpeta()
         self._actualizar_label_vigilada()
@@ -656,7 +656,7 @@ class VentanaPrincipal(QMainWindow):
 
         cabecera = QFrame()
         cabecera.setObjectName("cabecera")
-        cabecera.setFixedHeight(82)
+        cabecera.setFixedHeight(68)
         lc = QHBoxLayout(cabecera)
         lc.setContentsMargins(22, 12, 22, 12)
         logo = QLabel()
@@ -668,17 +668,22 @@ class VentanaPrincipal(QMainWindow):
         marca = QVBoxLayout()
         titulo = QLabel("Escáner de facturas")
         titulo.setObjectName("marca")
-        subtitulo = QLabel("Prepare las fotos y envíe el lote directamente a Aplifisa")
+        subtitulo = QLabel("Pegue, revise y envíe las facturas a Aplifisa")
         subtitulo.setObjectName("marcaSubtitulo")
         marca.addWidget(titulo)
         marca.addWidget(subtitulo)
         lc.addLayout(marca)
         lc.addStretch()
-        for texto, activo in (("1  Cargar", True), ("2  Preparar", False),
-                              ("3  Enviar", False)):
-            paso = QLabel(texto)
-            paso.setObjectName("pasoActivo" if activo else "pasoInactivo")
-            lc.addWidget(paso)
+        btn_pegar = QPushButton("Pegar  Ctrl+V")
+        btn_pegar.setObjectName("cabeceraAccion")
+        btn_pegar.setToolTip("Pegar la imagen que tengas en el portapapeles")
+        btn_pegar.clicked.connect(self.pegar_imagen)
+        lc.addWidget(btn_pegar)
+        btn_abrir_cab = QPushButton("Abrir fotos…")
+        btn_abrir_cab.setObjectName("cabeceraAccion")
+        btn_abrir_cab.setToolTip("También puedes arrastrar varias fotos sobre la ventana")
+        btn_abrir_cab.clicked.connect(self.abrir_imagen)
+        lc.addWidget(btn_abrir_cab)
         raiz.addWidget(cabecera)
 
         contenido = QWidget()
@@ -736,25 +741,28 @@ class VentanaPrincipal(QMainWindow):
         panel = QVBoxLayout()
         panel.setSpacing(8)
 
-        titulo = QLabel("Flujo de trabajo")
+        titulo = QLabel("Documento actual")
         titulo.setObjectName("tituloPanel")
-        ayuda = QLabel("Siga los pasos de arriba abajo. Las opciones menos usadas están plegadas.")
+        ayuda = QLabel("El recorte se detecta automáticamente. Corríjalo solo si hace falta.")
         ayuda.setObjectName("subtituloPanel")
         ayuda.setWordWrap(True)
         panel.addWidget(titulo)
         panel.addWidget(ayuda)
 
-        # === Cargar ===
-        g1 = QGroupBox("1 · Entrada")
+        # === Entrada rápida ===
+        g1 = QGroupBox("Entrada rápida")
         l1 = QVBoxLayout(g1)
-        btn_abrir = QPushButton("📂  Abrir fotos…  (Ctrl+O)")
+        btn_abrir = QPushButton("Abrir o arrastrar varias fotos…")
         btn_abrir.setMinimumHeight(38)
         btn_abrir.setToolTip(
             "También puedes arrastrar varias fotos a la vez sobre la ventana, "
             "o pegar con Ctrl+V.")
         btn_abrir.clicked.connect(self.abrir_imagen)
         l1.addWidget(btn_abrir)
-        self.btn_quitar = QPushButton("🗑️  Quitar la foto actual")
+        btn_pegar = QPushButton("Pegar del portapapeles  (Ctrl+V)")
+        btn_pegar.clicked.connect(self.pegar_imagen)
+        l1.addWidget(btn_pegar)
+        self.btn_quitar = QPushButton("Quitar la foto actual")
         self.btn_quitar.setToolTip(
             "Vacía la foto cargada para empezar de cero (p. ej. si pegaste la "
             "que no era). No borra las páginas ya añadidas al PDF.")
@@ -791,13 +799,13 @@ class VentanaPrincipal(QMainWindow):
         panel.addWidget(self.grupo_cola)
 
         # === Recortar y enderezar (incluye rotación) ===
-        g2 = QGroupBox("2 · Preparar documento")
+        g2 = QGroupBox("Recorte y orientación")
         l2 = QVBoxLayout(g2)
-        btn_auto = QPushButton("🔍  Detectar el documento  (F5)")
+        btn_auto = QPushButton("Volver a detectar el documento  (F5)")
         btn_auto.setMinimumHeight(38)
         btn_auto.clicked.connect(self.detectar_auto)
         l2.addWidget(btn_auto)
-        btn_man = QPushButton("✏️  Marcar 4 esquinas a mano")
+        btn_man = QPushButton("Corregir las 4 esquinas")
         btn_man.setMinimumHeight(38)
         btn_man.clicked.connect(self.iniciar_manual)
         l2.addWidget(btn_man)
@@ -824,14 +832,14 @@ class VentanaPrincipal(QMainWindow):
         panel.addWidget(g2)
 
         # === Tipo de salida ===
-        g3 = QGroupBox("3 · Acabado")
+        g3 = QGroupBox("Resultado")
         l3 = QVBoxLayout(g3)
         self.combo_filtro = QComboBox()
         self.combo_filtro.addItems([
-            "⚪ B/N nítido · contratos, facturas",
-            "⬛ B/N puro tinta · PDFs mínimos",
-            "🎨 Color limpio · DNI, fotos",
-            "📷 Color original",
+            "B/N nítido · recomendado para facturas",
+            "B/N puro tinta · avanzado",
+            "Color limpio · avanzado",
+            "Color original · sin tratamiento",
         ])
         self.combo_filtro.setMinimumHeight(34)
         self.combo_filtro.currentIndexChanged.connect(self._al_cambiar_filtro)
@@ -855,7 +863,7 @@ class VentanaPrincipal(QMainWindow):
         l4.addWidget(btn_reset)
         panel.addWidget(self._grupo_plegable("Ajustes finos", cont_aj, abierto=False))
 
-        self.btn_terminar = QPushButton("Añadir página y continuar")
+        self.btn_terminar = QPushButton("Añadir al lote y siguiente")
         self.btn_terminar.setObjectName("btnPrimario")
         self.btn_terminar.setMinimumHeight(46)
         self.btn_terminar.clicked.connect(self.terminar_y_siguiente)
@@ -909,7 +917,7 @@ class VentanaPrincipal(QMainWindow):
         btn_pdf.clicked.connect(lambda: self.guardar("pdf"))
         l5.addWidget(btn_pdf)
         # === PDF de varias fotos (miniaturas reordenables) ===
-        g6 = QGroupBox("4 · Lote y salida")
+        g6 = QGroupBox("Lote preparado")
         l6 = QVBoxLayout(g6)
         self.lista_pdf = QListWidget()
         self.lista_pdf.setViewMode(QListWidget.ViewMode.IconMode)
@@ -942,7 +950,7 @@ class VentanaPrincipal(QMainWindow):
         btn_exp_pdf.setMinimumHeight(36)
         btn_exp_pdf.clicked.connect(self.exportar_pdf_multipagina)
         l6.addWidget(btn_exp_pdf)
-        self.btn_enviar_aplifisa = QPushButton("Enviar lote a Facturas a Aplifisa")
+        self.btn_enviar_aplifisa = QPushButton("Enviar a Facturas a Aplifisa")
         self.btn_enviar_aplifisa.setObjectName("btnEnviar")
         self.btn_enviar_aplifisa.setMinimumHeight(46)
         self.btn_enviar_aplifisa.setToolTip(

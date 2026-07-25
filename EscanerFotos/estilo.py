@@ -233,6 +233,15 @@ QLabel#indicadorCola {{
 QFrame#cabecera {{ background: {ACENTO}; border: none; }}
 QLabel#marca {{ color: white; font-size: 20px; font-weight: 700; }}
 QLabel#marcaSubtitulo {{ color: #C9D8E8; font-size: 11px; }}
+QPushButton#cabeceraAccion {{
+    background: transparent; color: #E7EFF7;
+    border: 1px solid rgba(255,255,255,0.28);
+    padding: 7px 12px; font-weight: 600;
+}}
+QPushButton#cabeceraAccion:hover {{
+    background: rgba(255,255,255,0.12); color: white;
+    border-color: rgba(255,255,255,0.42);
+}}
 QLabel#pasoActivo {{
     background: #E8F0F8; color: {ACENTO}; border: 1px solid #BFD0E2;
     border-radius: 14px; padding: 6px 10px; font-weight: 700;
