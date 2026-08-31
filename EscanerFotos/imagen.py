@@ -596,3 +596,170 @@ def aplicar_pipeline(base, filtro_idx, brillo, contraste, nitidez, intensidad_bn
     return img
 
 
+def detectar_orientacion_texto(imagen):
+    """
+    Analiza la orientación predominante de las líneas de texto en el documento.
+    Devuelve (grados_a_rotar, confianza):
+      - grados_a_rotar: 0, 90, 180 o 270 (grados en sentido horario para dejarlo derecho).
+      - confianza: float de 0.0 a 1.0.
+    100% OpenCV/NumPy, sin dependencias externas ni IA.
+    """
+    h, w = imagen.shape[:2]
+    if h < 20 or w < 20:
+        return 0, 0.0
+
+    # Escalar a tamaño estándar para rapidez e invariancia de resolución (~800px máx)
+    m = max(h, w)
+    escala = min(1.0, 800.0 / m)
+    if escala < 1.0:
+        peq = cv2.resize(imagen, (int(w * escala), int(h * escala)), interpolation=cv2.INTER_AREA)
+    else:
+        peq = imagen
+
+    gris = cv2.cvtColor(peq, cv2.COLOR_BGR2GRAY) if len(peq.shape) == 3 else peq
+    plano = _aplanar_fondo(gris)
+    _, bin_texto = cv2.threshold(plano, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+
+    prop_tinta = float(np.mean(bin_texto > 0))
+    if prop_tinta < 0.002 or prop_tinta > 0.50:
+        return 0, 0.0
+
+    # 1. Proyecciones direccionales morfológicas
+    k_h = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 1))
+    lineas_h = cv2.morphologyEx(bin_texto, cv2.MORPH_CLOSE, k_h)
+
+    k_v = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 15))
+    lineas_v = cv2.morphologyEx(bin_texto, cv2.MORPH_CLOSE, k_v)
+
+    proj_h = np.sum(lineas_h, axis=1).astype(np.float64)
+    std_h = np.std(proj_h) / (np.mean(proj_h) + 1e-5)
+
+    proj_v = np.sum(lineas_v, axis=0).astype(np.float64)
+    std_v = np.std(proj_v) / (np.mean(proj_v) + 1e-5)
+
+    sobel_y = np.abs(cv2.Sobel(plano, cv2.CV_32F, 0, 1, ksize=3))
+    sobel_x = np.abs(cv2.Sobel(plano, cv2.CV_32F, 1, 0, ksize=3))
+    energia_y = float(np.mean(sobel_y))
+    energia_x = float(np.mean(sobel_x))
+
+    ratio_h = std_h * (energia_y + 1e-3)
+    ratio_v = std_v * (energia_x + 1e-3)
+
+    es_horizontal = ratio_h >= ratio_v
+
+    ph, pw = bin_texto.shape[:2]
+    if es_horizontal:
+        arriba = float(np.sum(bin_texto[: ph // 3, :]))
+        abajo = float(np.sum(bin_texto[2 * ph // 3 :, :]))
+        confianza = min(1.0, abs(ratio_h - ratio_v) / (max(ratio_h, ratio_v) + 1e-5))
+        if abajo > arriba * 1.35 and confianza > 0.1:
+            return 180, confianza
+        return 0, confianza
+    else:
+        izq = float(np.sum(bin_texto[:, : pw // 3]))
+        der = float(np.sum(bin_texto[:, 2 * pw // 3 :]))
+        confianza = min(1.0, abs(ratio_v - ratio_h) / (max(ratio_h, ratio_v) + 1e-5))
+        if der > izq * 1.15:
+            return 270, confianza
+        elif izq > der * 1.15:
+            return 90, confianza
+        else:
+            return 90, confianza
+
+
+def auto_orientar_documento(imagen):
+    """
+    Detecta la orientación del texto y rota la imagen para dejarla derecha.
+    Devuelve (imagen_rotada, grados_aplicados).
+    """
+    grados, conf = detectar_orientacion_texto(imagen)
+    if grados != 0 and conf >= 0.15:
+        return rotar_imagen(imagen, grados), grados
+    return imagen, 0
+
+
+def detectar_multiples_documentos(imagen, max_docs=8, area_min=0.04):
+    """
+    Detecta múltiples documentos o tickets rectangulares presentes en una misma foto.
+    Devuelve una lista de arrays de 4 puntos ordenados [arriba-izq, arriba-der, abajo-der, abajo-izq].
+    """
+    altura_orig, anchura_orig = imagen.shape[:2]
+    ratio = 1000.0 / max(altura_orig, anchura_orig)
+    if ratio < 1.0:
+        img_p = cv2.resize(imagen, None, fx=ratio, fy=ratio)
+    else:
+        img_p = imagen.copy()
+        ratio = 1.0
+
+    gris = cv2.cvtColor(img_p, cv2.COLOR_BGR2GRAY)
+    lab = cv2.cvtColor(img_p, cv2.COLOR_BGR2LAB)
+    forma = img_p.shape[:2]
+    kernel = np.ones((5, 5), np.uint8)
+    kernel_g = np.ones((11, 11), np.uint8)
+
+    candidatos = []
+
+    # Estrategia 1: Canny sobre gris
+    desenfoque = cv2.GaussianBlur(gris, (5, 5), 0)
+    bordes = cv2.Canny(desenfoque, 40, 140)
+    bordes = cv2.morphologyEx(bordes, cv2.MORPH_CLOSE, kernel)
+    candidatos.extend(_cuadrilateros_en(bordes, forma))
+
+    # Estrategia 2: Máscara frente al fondo
+    mask_fg = _mascara_primer_plano(lab, forma)
+    mask_fg = cv2.morphologyEx(mask_fg, cv2.MORPH_CLOSE, kernel_g)
+    mask_fg = cv2.morphologyEx(mask_fg, cv2.MORPH_OPEN, kernel_g)
+    candidatos.extend(_cuadrilateros_en(mask_fg, forma))
+
+    # Estrategia 3: Umbral adaptativo
+    th = cv2.adaptiveThreshold(gris, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 31, 10)
+    th = cv2.morphologyEx(th, cv2.MORPH_CLOSE, kernel)
+    candidatos.extend(_cuadrilateros_en(th, forma))
+
+    # Filtrar contornos convexos válidos
+    area_total = forma[0] * forma[1]
+    validos = []
+    for pts in candidatos:
+        cnt = pts.reshape(-1, 1, 2).astype(np.int32)
+        if not cv2.isContourConvex(cnt):
+            continue
+        area = cv2.contourArea(cnt)
+        if area < area_total * area_min or area > area_total * 0.96:
+            continue
+        validos.append((pts, area))
+
+    validos.sort(key=lambda x: x[1], reverse=True)
+
+    # Supresión de no máximos (IoU) para eliminar duplicados del mismo ticket
+    resultado = []
+    for pts, _ in validos:
+        cnt1 = pts.reshape(-1, 1, 2).astype(np.int32)
+        solapado = False
+        for res_pts in resultado:
+            cnt2 = res_pts.reshape(-1, 1, 2).astype(np.int32)
+            m1 = np.zeros(forma, dtype=np.uint8)
+            m2 = np.zeros(forma, dtype=np.uint8)
+            cv2.fillPoly(m1, [cnt1], 255)
+            cv2.fillPoly(m2, [cnt2], 255)
+            inter = np.sum((m1 > 0) & (m2 > 0))
+            union = np.sum((m1 > 0) | (m2 > 0))
+            if union > 0 and (inter / union) > 0.25:
+                solapado = True
+                break
+        if not solapado:
+            resultado.append(pts)
+            if len(resultado) >= max_docs:
+                break
+
+    # Reescalar a resolución original y ordenar
+    final = []
+    for pts in resultado:
+        pts_orig = pts / ratio
+        pts_ord = ordenar_puntos(pts_orig)
+        final.append(pts_ord)
+
+    final.sort(key=lambda p: (p[0][1], p[0][0]))
+    return final
+
+
+

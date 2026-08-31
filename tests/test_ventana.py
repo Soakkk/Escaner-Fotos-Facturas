@@ -168,3 +168,24 @@ def test_intensidad_visible_solo_en_modos_bn():
     for idx in (2, 3):                         # Modos de color: sin intensidad B/N
         v.combo_filtro.setCurrentIndex(idx)
         assert v.cont_intensidad.isHidden()
+
+
+def test_auto_orientar_en_ventana():
+    v = ef.VentanaPrincipal()
+    # Crear doc con texto
+    doc = np.full((1200, 800, 3), 255, dtype=np.uint8)
+    cv2.rectangle(doc, (100, 60), (700, 160), (30, 30, 30), -1)
+    for y in range(250, 950, 40):
+        cv2.line(doc, (100, y), (700, y), (40, 40, 40), 4)
+
+    # Rotado 90 grados
+    rot90 = cv2.rotate(doc, cv2.ROTATE_90_CLOCKWISE)
+    v._cargar_cv(rot90)
+    assert v.imagen_original.shape[0] == 800
+    assert v.imagen_original.shape[1] == 1200
+
+    v.auto_orientar()
+    base = v._base_full()
+    assert base.shape[0] == 1200
+    assert base.shape[1] == 800
+

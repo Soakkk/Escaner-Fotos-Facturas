@@ -301,3 +301,36 @@ def test_componer_dni_no_deforma_la_proporcion():
     alto = ys[mitad].max() - ys[mitad].min() + 1
     ancho = xs[mitad].max() - xs[mitad].min() + 1
     assert abs((ancho / alto) - 1.6) < 0.05
+
+
+from imagen import (
+    detectar_orientacion_texto, auto_orientar_documento,
+    detectar_multiples_documentos, rotar_imagen,
+)
+
+def test_detectar_orientacion_y_auto_orientar_sintetico():
+    doc0 = np.full((1200, 800, 3), 255, dtype=np.uint8)
+    cv2.rectangle(doc0, (100, 60), (700, 160), (30, 30, 30), -1)
+    for y in range(250, 950, 40):
+        cv2.line(doc0, (100, y), (700, y), (40, 40, 40), 4)
+
+    for deg in (0, 90, 180, 270):
+        rot = rotar_imagen(doc0, deg) if deg != 0 else doc0
+        rotada, aplicado = auto_orientar_documento(rot)
+        assert rotada.shape == doc0.shape
+        diff = np.mean(np.abs(rotada.astype(float) - doc0.astype(float)))
+        assert diff < 1.0, f"Fallo al restaurar rotación de {deg}°, diff={diff}"
+
+
+def test_detectar_multiples_documentos_en_mesa():
+    mesa = np.full((1200, 1600, 3), 50, dtype=np.uint8)
+    # Ticket 1 (izquierda)
+    cv2.rectangle(mesa, (100, 150), (650, 1050), (230, 230, 230), -1)
+    # Ticket 2 (derecha)
+    cv2.rectangle(mesa, (850, 200), (1450, 1000), (240, 240, 240), -1)
+
+    docs = detectar_multiples_documentos(mesa)
+    assert len(docs) == 2
+    # El primero está a la izquierda / más arriba
+    assert docs[0][0][0] < docs[1][0][0] or docs[0][0][1] < docs[1][0][1]
+

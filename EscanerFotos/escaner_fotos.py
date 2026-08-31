@@ -63,7 +63,8 @@ from imagen import (
     detectar_documento, corregir_perspectiva, rotar_imagen, aplicar_pipeline,
     leer_imagen, es_ruta_imagen, EXTENSIONES_IMAGEN, miniatura_archivo,
     codificar_pagina, decodificar_pagina, pagina_a_pil_pdf, cv_a_pil_pdf,
-    componer_dni,
+    componer_dni, detectar_orientacion_texto, auto_orientar_documento,
+    detectar_multiples_documentos,
 )
 from cola import siguiente_de_cola, texto_cola
 from integracion_aplifisa import lanzar_aplifisa, localizar_aplifisa
@@ -396,6 +397,8 @@ class VentanaPrincipal(QMainWindow):
         QShortcut(QKeySequence("Ctrl+Z"), self, activated=self.lienzo_original.deshacer_ultimo_punto)
         QShortcut(QKeySequence("Ctrl+R"), self, activated=self.reset_ajustes)
         QShortcut(QKeySequence("Ctrl+V"), self, activated=self.pegar_imagen)
+        QShortcut(QKeySequence("Ctrl+Shift+R"), self, activated=self.auto_orientar)
+        QShortcut(QKeySequence("Ctrl+Alt+R"), self, activated=self.auto_orientar)
 
     # ----------------------------------------------------------
     # Barra de estado
@@ -805,6 +808,10 @@ class VentanaPrincipal(QMainWindow):
         btn_auto.setMinimumHeight(38)
         btn_auto.clicked.connect(self.detectar_auto)
         l2.addWidget(btn_auto)
+        btn_multi = QPushButton("📑  Detectar varios tickets en la foto")
+        btn_multi.setToolTip("Si hay varios tickets sobre la mesa, los recorta por separado y los encola")
+        btn_multi.clicked.connect(self.detectar_multiples_tickets)
+        l2.addWidget(btn_multi)
         btn_man = QPushButton("Corregir las 4 esquinas")
         btn_man.setMinimumHeight(38)
         btn_man.clicked.connect(self.iniciar_manual)
@@ -813,6 +820,9 @@ class VentanaPrincipal(QMainWindow):
         btn_sin_recortar.clicked.connect(self.usar_sin_recortar)
         l2.addWidget(btn_sin_recortar)
         fila_rot = QHBoxLayout()
+        btn_auto_rot = QPushButton("🪄 Auto")
+        btn_auto_rot.setToolTip("Detecta la orientación del texto y gira el documento automáticamente (Ctrl+Shift+R)")
+        btn_auto_rot.clicked.connect(self.auto_orientar)
         btn_rot_izq = QPushButton("⟲ 90°")
         btn_rot_der = QPushButton("⟳ 90°")
         btn_rot_180 = QPushButton("180°")
@@ -822,6 +832,7 @@ class VentanaPrincipal(QMainWindow):
         btn_rot_izq.clicked.connect(lambda: self.rotar_original(270))
         btn_rot_der.clicked.connect(lambda: self.rotar_original(90))
         btn_rot_180.clicked.connect(lambda: self.rotar_original(180))
+        fila_rot.addWidget(btn_auto_rot)
         fila_rot.addWidget(btn_rot_izq)
         fila_rot.addWidget(btn_rot_der)
         fila_rot.addWidget(btn_rot_180)
@@ -1123,6 +1134,58 @@ class VentanaPrincipal(QMainWindow):
         self._actualizar_preview_base()
         self.actualizar_procesado()
         self._actualizar_barra_estado()
+
+    def auto_orientar(self):
+        if self.imagen_original is None:
+            self.statusBar().showMessage("Primero abre una imagen para auto-orientar", 3000)
+            return
+        base = self.imagen_enderezada if self.imagen_enderezada is not None else self.imagen_original
+        _, grados = auto_orientar_documento(base)
+        if grados != 0:
+            if self.imagen_enderezada is not None:
+                self.imagen_enderezada = rotar_imagen(self.imagen_enderezada, grados)
+                self._actualizar_preview_base()
+                self.actualizar_procesado()
+            else:
+                self.rotar_original(grados)
+            self.statusBar().showMessage(f"🪄 Documento auto-orientado ({grados}°)", 4000)
+        else:
+            self.statusBar().showMessage("El documento ya tiene la orientación correcta", 3000)
+
+    def detectar_multiples_tickets(self):
+        if self.imagen_original is None:
+            QMessageBox.warning(self, "Atención", "Primero abre una imagen con varios tickets.")
+            return
+        docs = detectar_multiples_documentos(self.imagen_original)
+        if not docs or len(docs) <= 1:
+            self.detectar_auto(silencioso=False)
+            return
+
+        # El primer ticket pasa a ser la imagen activa actual
+        puntos_0 = docs[0]
+        self.lienzo_original.mostrar_esquinas(puntos_0.tolist())
+        crop_0 = corregir_perspectiva(self.imagen_original, puntos_0)
+        crop_0, _ = auto_orientar_documento(crop_0)
+        self.imagen_enderezada = crop_0
+        self._estado_recorte(f"Ticket 1/{len(docs)} detectado", ok=True)
+        self._actualizar_preview_base()
+        self.actualizar_procesado()
+
+        # Los siguientes tickets se procesan y se añaden directamente como páginas al lote
+        filt_idx, br, ct, nit, int_bn = self._params()
+        for idx, puntos_i in enumerate(docs[1:], start=2):
+            crop_i = corregir_perspectiva(self.imagen_original, puntos_i)
+            crop_i, _ = auto_orientar_documento(crop_i)
+            proc_i = aplicar_pipeline(crop_i, filt_idx, br, ct, nit, int_bn)
+            self.anadir_pagina_pdf(proc_i)
+
+        QMessageBox.information(
+            self, "Múltiples tickets detectados",
+            f"Se han detectado {len(docs)} tickets en la foto:\n\n"
+            f"• Ticket 1: cargado en pantalla para revisar.\n"
+            f"• Tickets 2 a {len(docs)}: añadidos directamente al lote del PDF.\n\n"
+            "Pulsa «Añadir al lote y siguiente» cuando termines de revisar el primer ticket."
+        )
 
     def detectar_auto(self, silencioso=False):
         if self.imagen_original is None:
