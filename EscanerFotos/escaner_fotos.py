@@ -407,18 +407,27 @@ class VentanaPrincipal(QMainWindow):
             ).decode("ascii")
             for i in range(self.lista_pdf.count())
         ]
-        foto_embebida = ""
-        if self.imagen_original is not None and not self._ruta_actual:
+        def codificar_foto(imagen):
+            if imagen is None:
+                return ""
             ok, buffer_png = cv2.imencode(
-                ".png", self.imagen_original,
+                ".png", imagen,
                 [cv2.IMWRITE_PNG_COMPRESSION, 3],
             )
-            if ok:
-                foto_embebida = base64.b64encode(buffer_png.tobytes()).decode("ascii")
+            if not ok:
+                raise ValueError("No se pudo guardar la foto de trabajo")
+            return base64.b64encode(buffer_png.tobytes()).decode("ascii")
         filtro, brillo, contraste, nitidez, intensidad = self._params()
         return {
             "foto_actual": self._ruta_actual,
-            "foto_actual_png": foto_embebida,
+            "foto_actual_png": codificar_foto(self.imagen_original),
+            "geometria": {
+                "enderezada_png": codificar_foto(self.imagen_enderezada),
+                "puntos": self.lienzo_original.puntos,
+                "modo_seleccion": self.lienzo_original.modo_seleccion,
+                "modo_editar": self.lienzo_original.modo_editar,
+                "estado": self.lbl_estado_recorte.text(),
+            },
             "foto_fallida": self._ruta_fallida_actual,
             "errores_cola": dict(self._errores_cola),
             "cola": list(self.cola),
@@ -459,9 +468,26 @@ class VentanaPrincipal(QMainWindow):
                 except (ValueError, TypeError):
                     imagen = None
                 if imagen is not None:
-                    self._cargar_cv(imagen)
+                    self._cargar_cv(imagen, ruta_actual=ruta_actual,
+                                    detectar="geometria" not in datos)
             elif ruta_actual and os.path.isfile(ruta_actual):
                 self._cargar_archivo(ruta_actual)
+            geometria = datos.get("geometria")
+            if geometria is not None and self.imagen_original is not None:
+                recorte = geometria.get("enderezada_png", "")
+                self.imagen_enderezada = cv2.imdecode(
+                    np.frombuffer(base64.b64decode(recorte, validate=True), dtype=np.uint8),
+                    cv2.IMREAD_COLOR,
+                ) if recorte else None
+                lienzo = self.lienzo_original
+                lienzo.puntos = geometria.get("puntos", [])
+                lienzo.modo_seleccion = bool(geometria.get("modo_seleccion"))
+                lienzo.modo_editar = bool(geometria.get("modo_editar"))
+                lienzo.setCursor(Qt.CursorShape.CrossCursor if lienzo.modo_seleccion
+                                 else Qt.CursorShape.ArrowCursor)
+                lienzo.actualizar_visualizacion()
+                self.lbl_estado_recorte.setText(geometria.get("estado", ""))
+                self._actualizar_preview_base()
             self._ruta_fallida_actual = str(datos.get("foto_fallida", ""))
             self._errores_cola = dict(datos.get("errores_cola", {}))
             if hasattr(self, "btn_reintentar"):
@@ -1378,7 +1404,7 @@ class VentanaPrincipal(QMainWindow):
             )
             self._guardar_sesion_actual()
 
-    def _cargar_cv(self, img, ruta_origen="", ruta_actual=""):
+    def _cargar_cv(self, img, ruta_origen="", ruta_actual="", detectar=True):
         self.imagen_original = img
         self.imagen_enderezada = None
         self._ruta_origen = ruta_origen or self._ruta_origen
@@ -1388,7 +1414,8 @@ class VentanaPrincipal(QMainWindow):
         self._estado_recorte("Sin recortar")
         self._resetear_sliders()
         self._actualizar_preview_base()
-        self.detectar_auto(silencioso=True)
+        if detectar:
+            self.detectar_auto(silencioso=True)
         self.actualizar_procesado()
         self._actualizar_barra_estado()
         self._guardar_sesion_actual()
@@ -1466,6 +1493,7 @@ class VentanaPrincipal(QMainWindow):
         self._actualizar_preview_base()
         self.actualizar_procesado()
         self._actualizar_barra_estado()
+        self._guardar_sesion_actual()
 
     def auto_orientar(self):
         if self.imagen_original is None:
@@ -1487,6 +1515,7 @@ class VentanaPrincipal(QMainWindow):
             self.statusBar().showMessage(f"🪄 Documento auto-orientado ({grados}°)", 4000)
         else:
             self.statusBar().showMessage("El documento ya tiene la orientación correcta", 3000)
+        self._guardar_sesion_actual()
 
     def detectar_multiples_tickets(self):
         if self.imagen_original is None:
@@ -1547,6 +1576,7 @@ class VentanaPrincipal(QMainWindow):
         self._estado_recorte("Recorte automático", ok=True)
         self._actualizar_preview_base()
         self.actualizar_procesado()
+        self._guardar_sesion_actual()
 
     def iniciar_manual(self):
         if self.imagen_original is None:
@@ -1563,6 +1593,7 @@ class VentanaPrincipal(QMainWindow):
         self._estado_recorte("Recorte manual", ok=True)
         self._actualizar_preview_base()
         self.actualizar_procesado()
+        self._guardar_sesion_actual()
 
     def usar_sin_recortar(self):
         if self.imagen_original is None:
@@ -1572,6 +1603,7 @@ class VentanaPrincipal(QMainWindow):
         self._estado_recorte("Sin recortar")
         self._actualizar_preview_base()
         self.actualizar_procesado()
+        self._guardar_sesion_actual()
 
     # --- Procesado: vista previa (rápida) vs. resolución completa ---
 

@@ -425,3 +425,29 @@ def test_propuesta_tardia_no_recorta_pixeles_distintos(tmp_path, cambio):
     ventana.detectar_auto(silencioso=True)
 
     assert np.array_equal(ventana.imagen_enderezada, esperado)
+
+
+@pytest.mark.parametrize('origen', ['archivo', 'pegada'])
+@pytest.mark.parametrize('recorte', ['manual', 'sin_recortar'])
+def test_sesion_recupera_pixeles_geometria_y_recorte(tmp_path, origen, recorte):
+    ventana = ef.VentanaPrincipal()
+    ruta = _crear_fotos(tmp_path, 1)[0] if origen == 'archivo' else ''
+    ventana._cargar_cv(_foto_documento(), ruta_actual=ruta)
+    ventana.rotar_original(90)
+    if recorte == 'manual':
+        puntos = [[120, 240], [800, 210], [810, 1180], [100, 1200]]
+        ventana.lienzo_original.mostrar_esquinas(puntos)
+        ventana._al_recibir_puntos_manuales(puntos)
+    else:
+        ventana.usar_sin_recortar()
+    original = ventana.imagen_original.copy()
+    esperado = ventana.procesada_full().copy()
+    puntos_antes = list(ventana.lienzo_original.puntos)
+    # Restaurar del último cambio, sin invocar un guardado artificial.
+    restaurada = ef.VentanaPrincipal()
+
+    assert np.array_equal(restaurada.imagen_original, original)
+    assert np.array_equal(restaurada.procesada_full(), esperado)
+    assert restaurada.lienzo_original.puntos == puntos_antes
+    assert (restaurada.imagen_enderezada is None) == (recorte == 'sin_recortar')
+    assert restaurada._ruta_actual == ruta
