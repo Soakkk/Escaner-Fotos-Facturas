@@ -8,7 +8,7 @@ from PySide6.QtCore import QThread, Signal
 
 from imagen import (
     detectar_documento,
-    detectar_orientacion_texto,
+    auto_orientar_documento,
     leer_imagen,
     miniatura_archivo,
 )
@@ -26,7 +26,7 @@ def calcular_precalculo(ruta: str, lado_miniatura: int = 96) -> PrecalculoResult
     imagen = leer_imagen(ruta)
     miniatura = miniatura_archivo(ruta, lado_miniatura)
     puntos = detectar_documento(imagen)
-    rotacion, _confianza = detectar_orientacion_texto(imagen)
+    _, rotacion = auto_orientar_documento(imagen)
     return PrecalculoResultado(ruta, miniatura, puntos, int(rotacion))
 
 
