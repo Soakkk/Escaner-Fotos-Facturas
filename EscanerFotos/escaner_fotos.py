@@ -520,7 +520,9 @@ class VentanaPrincipal(QMainWindow):
             nombre_perfil = str(datos.get("perfil", self._perfil_actual))
             indice_perfil = self.combo_perfil.findText(nombre_perfil)
             if indice_perfil >= 0:
+                bloqueadas = self.combo_perfil.blockSignals(True)
                 self.combo_perfil.setCurrentIndex(indice_perfil)
+                self.combo_perfil.blockSignals(bloqueadas)
                 self._perfil_actual = nombre_perfil
             self._actualizar_label_carpeta()
 

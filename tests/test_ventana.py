@@ -451,3 +451,20 @@ def test_sesion_recupera_pixeles_geometria_y_recorte(tmp_path, origen, recorte):
     assert restaurada.lienzo_original.puntos == puntos_antes
     assert (restaurada.imagen_enderezada is None) == (recorte == 'sin_recortar')
     assert restaurada._ruta_actual == ruta
+
+
+def test_restaurar_nombre_perfil_no_reaplica_sus_valores(tmp_path):
+    from perfiles import PerfilEscaneo, guardar_perfil
+
+    guardar_perfil(PerfilEscaneo('Personalizado', 2, brillo=5, destino='perfil'))
+    ventana = ef.VentanaPrincipal()
+    ventana.combo_perfil.setCurrentText('Personalizado')
+    ventana.sld_brillo.setValue(27)
+    ventana.carpeta_salida = str(tmp_path / 'destino puntual')
+    ventana._guardar_sesion_actual()
+
+    restaurada = ef.VentanaPrincipal()
+
+    assert restaurada.combo_perfil.currentText() == 'Personalizado'
+    assert restaurada.sld_brillo.value() == 27
+    assert restaurada.carpeta_salida == str(tmp_path / 'destino puntual')
