@@ -339,6 +339,7 @@ class VentanaPrincipal(QMainWindow):
         self._ruta_update_lista = ""
         self._version_update_lista = ""
         self._restaurando_sesion = False
+        self._transicion_pagina = False
 
         self.cola = []
         self.cola_total = 0
@@ -447,7 +448,7 @@ class VentanaPrincipal(QMainWindow):
         }
 
     def _guardar_sesion_actual(self):
-        if self._restaurando_sesion:
+        if self._restaurando_sesion or self._transicion_pagina:
             return
         guardar_sesion(self._datos_sesion_actual())
 
@@ -677,6 +678,7 @@ class VentanaPrincipal(QMainWindow):
         self.cola = resto
         if siguiente is None:
             n = self.lista_pdf.count()
+            self.quitar_imagen()
             self.cola_total = 0
             self.cola_pos = 0
             self._actualizar_indicador_cola()
@@ -694,9 +696,18 @@ class VentanaPrincipal(QMainWindow):
         if img is None:
             QMessageBox.warning(self, "Atención", "Procesa una imagen primero.")
             return
-        self.anadir_pagina_pdf(img)
-        if self.cola_total:
-            self._cargar_siguiente_de_cola()
+        # La página y el cursor de la cola se publican en un solo snapshot.
+        # Hasta entonces el disco conserva íntegra la sesión anterior.
+        self._transicion_pagina = True
+        try:
+            self.anadir_pagina_pdf(img)
+            if self.cola_total:
+                self._cargar_siguiente_de_cola()
+            else:
+                self.quitar_imagen()
+        finally:
+            self._transicion_pagina = False
+        self._guardar_sesion_actual()
 
     def _saltar_actual(self):
         """Pasa a la siguiente foto de la tanda sin añadir la actual al PDF."""

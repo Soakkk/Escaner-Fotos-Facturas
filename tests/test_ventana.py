@@ -468,3 +468,58 @@ def test_restaurar_nombre_perfil_no_reaplica_sus_valores(tmp_path):
     assert restaurada.combo_perfil.currentText() == 'Personalizado'
     assert restaurada.sld_brillo.value() == 27
     assert restaurada.carpeta_salida == str(tmp_path / 'destino puntual')
+
+
+def test_confirmar_y_avanzar_solo_persiste_el_estado_conjunto(tmp_path, monkeypatch):
+    import sesion_trabajo
+
+    ventana = ef.VentanaPrincipal()
+    rutas = _crear_fotos(tmp_path, 2)
+    ventana._iniciar_cola(rutas)
+    guardados = []
+    guardar_real = ef.guardar_sesion
+
+    def guardar(datos):
+        guardados.append(datos)
+        guardar_real(datos)
+
+    monkeypatch.setattr(ef, 'guardar_sesion', guardar)
+    ventana.terminar_y_siguiente()
+
+    assert len(guardados) == 1
+    assert guardados[0]['foto_actual'] == rutas[1]
+    assert len(guardados[0]['paginas']) == 1
+    assert guardados[0]['cola'] == []
+    assert sesion_trabajo.leer_sesion() == guardados[0]
+    restaurada = ef.VentanaPrincipal()
+    assert restaurada._ruta_actual == rutas[1]
+    assert restaurada.lista_pdf.count() == 1
+
+
+def test_ultima_foto_confirmada_no_se_vuelve_a_ofrecer(tmp_path, monkeypatch):
+    monkeypatch.setattr(ef.QMessageBox, 'information', lambda *args: None)
+    ventana = ef.VentanaPrincipal()
+    ventana._iniciar_cola(_crear_fotos(tmp_path, 1))
+
+    ventana.terminar_y_siguiente()
+    restaurada = ef.VentanaPrincipal()
+
+    assert restaurada.lista_pdf.count() == 1
+    assert restaurada.procesada_full() is None
+    assert restaurada._ruta_actual == ''
+
+
+def test_interrupcion_antes_del_avance_conserva_sesion_anterior(tmp_path, monkeypatch):
+    from sesion_trabajo import leer_sesion
+
+    ventana = ef.VentanaPrincipal()
+    ventana._iniciar_cola(_crear_fotos(tmp_path, 2))
+    anterior = leer_sesion()
+    def interrumpir():
+        raise RuntimeError('cierre inesperado')
+    monkeypatch.setattr(ventana, '_cargar_siguiente_de_cola', interrumpir)
+
+    with pytest.raises(RuntimeError, match='cierre inesperado'):
+        ventana.terminar_y_siguiente()
+
+    assert leer_sesion() == anterior
