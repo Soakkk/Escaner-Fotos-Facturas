@@ -103,7 +103,7 @@ class LienzoImagen(QLabel):
 
     def __init__(self):
         super().__init__()
-        self.setMinimumSize(450, 500)
+        self.setMinimumSize(280, 400)
         self.setObjectName("lienzo")
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -493,6 +493,13 @@ class VentanaPrincipal(QMainWindow):
     def closeEvent(self, event):
         self._guardar_sesion_actual()
         super().closeEvent(event)
+
+    def resizeEvent(self, event):
+        if hasattr(self, "accion_abrir_cabecera"):
+            mostrar_secundarias = event.size().width() >= 1150
+            self.accion_abrir_cabecera.setVisible(mostrar_secundarias)
+            self.accion_pegar_cabecera.setVisible(mostrar_secundarias)
+        super().resizeEvent(event)
 
     # ----------------------------------------------------------
     # Atajos de teclado
@@ -884,16 +891,22 @@ class VentanaPrincipal(QMainWindow):
         marca.addWidget(subtitulo)
         lc.addLayout(marca)
         lc.addStretch()
-        btn_pegar = QPushButton("Pegar  Ctrl+V")
-        btn_pegar.setObjectName("cabeceraAccion")
-        btn_pegar.setToolTip("Pegar la imagen que tengas en el portapapeles")
-        btn_pegar.clicked.connect(self.pegar_imagen)
-        lc.addWidget(btn_pegar)
-        btn_abrir_cab = QPushButton("Abrir fotos…")
-        btn_abrir_cab.setObjectName("cabeceraAccion")
-        btn_abrir_cab.setToolTip("También puedes arrastrar varias fotos sobre la ventana")
-        btn_abrir_cab.clicked.connect(self.abrir_imagen)
-        lc.addWidget(btn_abrir_cab)
+        self.accion_pegar_cabecera = QPushButton("Pegar  Ctrl+V")
+        self.accion_pegar_cabecera.setObjectName("accionPegar")
+        self.accion_pegar_cabecera.setProperty("role", "cabeceraAccion")
+        self.accion_pegar_cabecera.setToolTip(
+            "Pegar la imagen que tengas en el portapapeles"
+        )
+        self.accion_pegar_cabecera.clicked.connect(self.pegar_imagen)
+        lc.addWidget(self.accion_pegar_cabecera)
+        self.accion_abrir_cabecera = QPushButton("Abrir fotos…")
+        self.accion_abrir_cabecera.setObjectName("accionAbrir")
+        self.accion_abrir_cabecera.setProperty("role", "cabeceraAccion")
+        self.accion_abrir_cabecera.setToolTip(
+            "También puedes arrastrar varias fotos sobre la ventana"
+        )
+        self.accion_abrir_cabecera.clicked.connect(self.abrir_imagen)
+        lc.addWidget(self.accion_abrir_cabecera)
         self.btn_actualizacion_lista = QPushButton("Reiniciar y actualizar")
         self.btn_actualizacion_lista.setObjectName("actualizacionLista")
         self.btn_actualizacion_lista.clicked.connect(
@@ -920,22 +933,26 @@ class VentanaPrincipal(QMainWindow):
         self.lienzo_original.imagenes_soltadas.connect(self._iniciar_cola)
         col_izq.addWidget(self.lienzo_original)
         w_izq = QWidget()
+        w_izq.setObjectName("zonaOriginal")
         w_izq.setLayout(col_izq)
 
         # Columna central: controles (con scroll para que no se solapen en pantalla completa)
         w_ctrl = self._construir_panel_controles()
-        scroll_ctrl = QScrollArea()
-        scroll_ctrl.setWidgetResizable(True)
-        scroll_ctrl.setWidget(w_ctrl)
-        scroll_ctrl.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll_ctrl.setMinimumWidth(360)
-        scroll_ctrl.setMaximumWidth(410)
-        scroll_ctrl.setFrameShape(QScrollArea.Shape.NoFrame)
+        self.scroll_controles = QScrollArea()
+        self.scroll_controles.setWidgetResizable(True)
+        self.scroll_controles.setWidget(w_ctrl)
+        self.scroll_controles.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.scroll_controles.setMinimumWidth(360)
+        self.scroll_controles.setMaximumWidth(410)
+        self.scroll_controles.setFrameShape(QScrollArea.Shape.NoFrame)
         centro = QWidget()
+        centro.setObjectName("panelControles")
         centro_layout = QVBoxLayout(centro)
         centro_layout.setContentsMargins(0, 0, 0, 0)
         centro_layout.setSpacing(8)
-        centro_layout.addWidget(scroll_ctrl, 1)
+        centro_layout.addWidget(self.scroll_controles, 1)
         centro.setMinimumWidth(360)
         centro.setMaximumWidth(410)
 
@@ -947,6 +964,7 @@ class VentanaPrincipal(QMainWindow):
         self.lienzo_resultado = LienzoImagen()
         col_der.addWidget(self.lienzo_resultado)
         w_der = QWidget()
+        w_der.setObjectName("zonaResultado")
         w_der.setLayout(col_der)
 
         layout.addWidget(w_izq, 4)
@@ -1024,7 +1042,7 @@ class VentanaPrincipal(QMainWindow):
         self.lista_cola.model().rowsMoved.connect(self._sincronizar_cola_desde_lista)
         lc.addWidget(self.lista_cola)
         fila_cola = QHBoxLayout()
-        btn_saltar = QPushButton("⏭  Saltar esta")
+        btn_saltar = QPushButton("Saltar esta")
         btn_saltar.setToolTip("Pasa a la siguiente foto sin añadir esta al PDF.")
         btn_saltar.clicked.connect(self._saltar_actual)
         btn_vaciar_cola = QPushButton("Vaciar cola")
@@ -1046,7 +1064,7 @@ class VentanaPrincipal(QMainWindow):
         btn_auto.setMinimumHeight(38)
         btn_auto.clicked.connect(self.detectar_auto)
         l2.addWidget(btn_auto)
-        btn_multi = QPushButton("📑  Detectar varios tickets en la foto")
+        btn_multi = QPushButton("Detectar varios tickets en la foto")
         btn_multi.setToolTip("Si hay varios tickets sobre la mesa, los recorta por separado y los encola")
         btn_multi.clicked.connect(self.detectar_multiples_tickets)
         l2.addWidget(btn_multi)
@@ -1058,7 +1076,7 @@ class VentanaPrincipal(QMainWindow):
         btn_sin_recortar.clicked.connect(self.usar_sin_recortar)
         l2.addWidget(btn_sin_recortar)
         fila_rot = QHBoxLayout()
-        btn_auto_rot = QPushButton("🪄 Auto")
+        btn_auto_rot = QPushButton("Auto")
         btn_auto_rot.setToolTip("Detecta la orientación del texto y gira el documento automáticamente (Ctrl+Shift+R)")
         btn_auto_rot.clicked.connect(self.auto_orientar)
         btn_rot_izq = QPushButton("⟲ 90°")
@@ -1136,7 +1154,7 @@ class VentanaPrincipal(QMainWindow):
         l5.addLayout(fila_pref)
 
         # Guardado rápido: destino fijo + nombre por fecha-hora, sin diálogos
-        btn_rapido = QPushButton("⚡  Guardado rápido  (Enter)")
+        btn_rapido = QPushButton("Guardado rápido  (Enter)")
         btn_rapido.setObjectName("btnExito")
         btn_rapido.setMinimumHeight(44)
         btn_rapido.clicked.connect(self.guardado_rapido)
@@ -1182,7 +1200,7 @@ class VentanaPrincipal(QMainWindow):
         )
         l6.addWidget(self.lista_pdf)
         fila_pdf = QHBoxLayout()
-        btn_add_pdf = QPushButton("➕ Añadir")
+        btn_add_pdf = QPushButton("Añadir")
         btn_add_pdf.clicked.connect(lambda: self.anadir_pagina_pdf())
         btn_quitar_pdf = QPushButton("Quitar")
         btn_quitar_pdf.clicked.connect(self.quitar_pagina_pdf)
@@ -1192,7 +1210,7 @@ class VentanaPrincipal(QMainWindow):
         fila_pdf.addWidget(btn_quitar_pdf)
         fila_pdf.addWidget(btn_vaciar_pdf)
         l6.addLayout(fila_pdf)
-        btn_dni = QPushButton("🪪  Unir 2 en 1 hoja (DNI)")
+        btn_dni = QPushButton("Unir 2 en 1 hoja (DNI)")
         btn_dni.setToolTip(
             "Combina las dos páginas seleccionadas (o las dos últimas) en una "
             "sola hoja A4: cara delantera arriba y trasera abajo.")
@@ -1240,7 +1258,9 @@ class VentanaPrincipal(QMainWindow):
         btn_vigilada.clicked.connect(self.elegir_carpeta_vigilada)
         fila_vig.addWidget(btn_vigilada)
         l_mas.addLayout(fila_vig)
-        panel.addWidget(self._grupo_plegable("Más opciones", cont_mas, abierto=False))
+        grupo_mas = self._grupo_plegable("Más opciones", cont_mas, abierto=False)
+        grupo_mas.setObjectName("masOpciones")
+        panel.addWidget(grupo_mas)
 
         self.combo_perfil.currentTextChanged.connect(self._aplicar_perfil)
         self.btn_guardar_perfil.clicked.connect(self._guardar_perfil_actual)

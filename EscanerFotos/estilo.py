@@ -1,4 +1,4 @@
-"""Sistema visual claro inspirado en el Generador de avisos fiscales."""
+"""Sistema visual compartido por la suite de oficina Asesoría E. Marín."""
 
 import os
 import sys
@@ -7,27 +7,38 @@ from PySide6.QtGui import QPalette, QColor
 
 # ---- Paleta -------------------------------------------------------------
 
-FONDO = "#F7F6F3"
-PANEL = "#FFFFFF"
-CONTROL = "#FFFFFF"
-CONTROL_HOVER = "#F4F8FB"
-CONTROL_PULSADO = "#E8EFF6"
-BORDE = "#D8E0E7"
-LIENZO = "#EEF2F5"
-TEXTO = "#1E293B"
-TEXTO_SUAVE = "#64748B"
-TEXTO_DESACTIVADO = "#A3AAB3"
+PAGE = "#F5F8FC"
+CARD = "#FFFFFF"
+INK = "#24384D"
+MUTED = "#5D7084"
+BORDER = "#DCE5F0"
+ACCENT = "#326FA6"
+SUCCESS = "#19724E"
+WARNING = "#86500A"
+DANGER = "#B43737"
 
-ACENTO = "#0B3159"
-ACENTO_HOVER = "#082745"
-ACENTO_PULSADO = "#061F38"
-EXITO = "#2E6B43"
-EXITO_HOVER = "#255738"
-EXITO_PULSADO = "#1D472E"
+# Alias descriptivos conservados para los consumidores existentes.
+FONDO = PAGE
+PANEL = CARD
+CONTROL = CARD
+CONTROL_HOVER = "#EDF4FA"
+CONTROL_PULSADO = "#E1ECF6"
+BORDE = BORDER
+LIENZO = "#EAF0F6"
+TEXTO = INK
+TEXTO_SUAVE = MUTED
+TEXTO_DESACTIVADO = "#8797A8"
+
+ACENTO = ACCENT
+ACENTO_HOVER = "#285F91"
+ACENTO_PULSADO = "#214F78"
+EXITO = SUCCESS
+EXITO_HOVER = "#145D40"
+EXITO_PULSADO = "#104A34"
 
 # Colores para texto enriquecido (setText con HTML) coherentes con el tema
 HTML_SUAVE = TEXTO_SUAVE
-HTML_OK = "#2E6B43"
+HTML_OK = SUCCESS
 
 
 def ruta_recurso(nombre):
@@ -45,7 +56,7 @@ def _url(nombre):
 QSS = f"""
 QWidget {{
     color: {TEXTO};
-    font-family: "Segoe UI", "Helvetica Neue", "Noto Sans", sans-serif;
+    font-family: "Segoe UI Variable", "Segoe UI", sans-serif;
     font-size: 13px;
 }}
 QMainWindow, QDialog, QMessageBox, QProgressDialog, QFileDialog {{
@@ -67,7 +78,7 @@ QGroupBox::title {{
     left: 10px;
     padding: 0 4px;
     color: {TEXTO_SUAVE};
-    background: {FONDO};
+    background: {PANEL};
 }}
 /* Grupo plegable cerrado: solo el título, sin caja vacía debajo */
 QGroupBox[plegado="true"] {{
@@ -83,9 +94,9 @@ QPushButton {{
     border-radius: 6px;
     padding: 7px 12px;
 }}
-QPushButton:hover {{ background: {CONTROL_HOVER}; border-color: #485058; }}
+QPushButton:hover {{ background: {CONTROL_HOVER}; border-color: {ACENTO}; }}
 QPushButton:pressed {{ background: {CONTROL_PULSADO}; }}
-QPushButton:focus {{ border-color: {ACENTO}; }}
+QPushButton:focus {{ border: 2px solid {ACENTO}; padding: 6px 11px; }}
 QPushButton:disabled {{ color: {TEXTO_DESACTIVADO}; background: #F1F3F5; }}
 
 QPushButton#btnPrimario {{
@@ -230,17 +241,21 @@ QLabel#indicadorCola {{
     border-radius: 6px;
     font-weight: 600;
 }}
-QFrame#cabecera {{ background: {ACENTO}; border: none; }}
-QLabel#marca {{ color: white; font-size: 20px; font-weight: 700; }}
-QLabel#marcaSubtitulo {{ color: #C9D8E8; font-size: 11px; }}
-QPushButton#cabeceraAccion {{
-    background: transparent; color: #E7EFF7;
-    border: 1px solid rgba(255,255,255,0.28);
+QFrame#cabecera {{
+    background: {PANEL};
+    border: none;
+    border-bottom: 1px solid {BORDE};
+}}
+QLabel#marca {{ color: {TEXTO}; font-size: 20px; font-weight: 700; }}
+QLabel#marcaSubtitulo {{ color: {TEXTO_SUAVE}; font-size: 11px; }}
+QPushButton[role="cabeceraAccion"] {{
+    background: {PANEL}; color: {ACENTO};
+    border: 1px solid {BORDE};
     padding: 7px 12px; font-weight: 600;
 }}
-QPushButton#cabeceraAccion:hover {{
-    background: rgba(255,255,255,0.12); color: white;
-    border-color: rgba(255,255,255,0.42);
+QPushButton[role="cabeceraAccion"]:hover {{
+    background: {CONTROL_HOVER}; color: {ACENTO_HOVER};
+    border-color: {ACENTO};
 }}
 QLabel#pasoActivo {{
     background: #E8F0F8; color: {ACENTO}; border: 1px solid #BFD0E2;
@@ -254,6 +269,21 @@ QPushButton#btnEnviar {{
     font-size: 14px; font-weight: 700;
 }}
 QPushButton#btnEnviar:hover {{ background: {ACENTO_HOVER}; }}
+QFrame#panelFinalizacion {{
+    background: #EDF6F2;
+    border: 1px solid #C9E1D6;
+    border-radius: 8px;
+}}
+QPushButton#actualizacionLista {{
+    background: #FFF7E8;
+    color: {WARNING};
+    border: 1px solid #E7CF9E;
+    font-weight: 700;
+}}
+QPushButton#actualizacionLista:hover {{
+    background: #FBECCE;
+    border-color: {WARNING};
+}}
 """
 
 

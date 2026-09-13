@@ -1,118 +1,88 @@
-"""Genera el icono de EscanerFotos (icono.ico + icono.png) con Pillow.
+"""Genera el icono de Escáner de Fotos dentro de la familia de la suite."""
 
-Diseño: documento blanco sobre fondo azul con la barra de luz verde de un
-escáner cruzándolo. Plano y con pocas formas para que siga siendo legible
-a 16×16 px. Ejecutar desde esta carpeta:  python generar_icono.py
-"""
+from pathlib import Path
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter
-
-S = 1024                       # se dibuja grande y se reescala
-
-AZUL_ARRIBA = (56, 124, 248)
-AZUL_ABAJO = (24, 80, 192)
-PAPEL = (250, 251, 253, 255)
-PLIEGUE = (210, 219, 231, 255)
-LINEA = (146, 158, 174, 255)
-VERDE_LUZ = (62, 224, 166)
+from PIL import Image, ImageDraw
 
 
-def _fondo_degradado():
-    """Cuadrado redondeado con degradado vertical azul."""
-    arriba = np.array(AZUL_ARRIBA, dtype=np.float64)
-    abajo = np.array(AZUL_ABAJO, dtype=np.float64)
-    t = np.linspace(0.0, 1.0, S)[:, None, None]
-    franja = arriba * (1 - t) + abajo * t
-    rgb = np.broadcast_to(franja, (S, S, 3)).astype(np.uint8)
-    fondo = Image.fromarray(rgb, "RGB").convert("RGBA")
+S = 1024
+AZUL_SUPERIOR = np.array((9, 61, 119), dtype=np.float64)
+AZUL_INFERIOR = np.array((4, 42, 88), dtype=np.float64)
+BLANCO = (252, 253, 255, 255)
+AZUL_TINTA = (12, 55, 108, 255)
+DORADO = (242, 174, 24, 255)
 
+
+def _mascara_de_la_referencia() -> Image.Image:
+    """Reutiliza la silueta del icono de Facturas sin modificar la referencia."""
+    referencia = (
+        Path(__file__).resolve().parents[3]
+        / "Facturas-a-Aplifisa"
+        / "assets"
+        / "app.png"
+    )
+    if referencia.is_file():
+        return Image.open(referencia).convert("RGBA").resize(
+            (S, S), Image.Resampling.LANCZOS
+        ).getchannel("A")
     mascara = Image.new("L", (S, S), 0)
-    ImageDraw.Draw(mascara).rounded_rectangle(
-        (0, 0, S - 1, S - 1), radius=int(S * 0.225), fill=255)
-    fondo.putalpha(mascara)
-    return fondo
+    rombo = Image.new("L", (760, 760), 0)
+    ImageDraw.Draw(rombo).rounded_rectangle((0, 0, 759, 759), 110, fill=255)
+    rombo = rombo.rotate(45, expand=True, resample=Image.Resampling.BICUBIC)
+    mascara.paste(rombo, ((S - rombo.width) // 2, (S - rombo.height) // 2), rombo)
+    return mascara
 
 
-def _documento():
-    """Hoja blanca con esquina plegada y líneas de texto, algo girada."""
-    dw, dh = 520, 680
-    pliegue = 130
-    doc = Image.new("RGBA", (dw, dh), (0, 0, 0, 0))
-    d = ImageDraw.Draw(doc)
-    # Silueta de la hoja con la esquina superior derecha recortada
-    d.rounded_rectangle((0, 0, dw - 1, dh - 1), radius=44, fill=PAPEL)
-    d.polygon([(dw - pliegue - 6, -2), (dw, -2), (dw, pliegue + 6)],
-              fill=(0, 0, 0, 0))
-    d.polygon([(dw - pliegue, 0), (dw, pliegue), (dw - pliegue, pliegue)],
-              fill=PLIEGUE)
-    # Líneas de texto
-    x0, x1 = 92, dw - 110
-    for i, (ancho, alto) in enumerate(
-            [(0.62, 34), (1.0, 26), (1.0, 26), (0.78, 26)]):
-        y = 150 + i * 92
-        color = (96, 110, 130, 255) if i == 0 else LINEA
-        d.rounded_rectangle(
-            (x0, y, x0 + (x1 - x0) * ancho, y + alto),
-            radius=alto // 2, fill=color)
-    return doc.rotate(5, expand=True, resample=Image.Resampling.BICUBIC)
+def _fondo() -> Image.Image:
+    y = np.linspace(0.0, 1.0, S)[:, None, None]
+    x = np.linspace(-1.0, 1.0, S)[None, :, None]
+    gradiente = AZUL_SUPERIOR * (1 - y) + AZUL_INFERIOR * y
+    brillo = np.clip(1.0 - np.abs(x) * 0.13, 0.82, 1.0)
+    rgb = np.broadcast_to(gradiente, (S, S, 3)) * brillo
+    imagen = Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8), "RGB").convert("RGBA")
+    imagen.putalpha(_mascara_de_la_referencia())
+    return imagen
 
 
-def _con_sombra(capa, desplaza=18, radio=22, alpha=90):
-    sombra = Image.new("RGBA", capa.size, (0, 0, 0, 0))
-    sombra.paste(Image.new("RGBA", capa.size, (10, 20, 40, alpha)),
-                 mask=capa.getchannel("A"))
-    sombra = sombra.filter(ImageFilter.GaussianBlur(radio))
-    lienzo = Image.new("RGBA",
-                       (capa.width + desplaza * 2, capa.height + desplaza * 2),
-                       (0, 0, 0, 0))
-    lienzo.alpha_composite(sombra, (desplaza, desplaza * 2))
-    lienzo.alpha_composite(capa, (desplaza, desplaza))
-    return lienzo
+def _pictograma(imagen: Image.Image) -> None:
+    d = ImageDraw.Draw(imagen)
+    d.rounded_rectangle((252, 170, 772, 625), radius=42, fill=BLANCO)
+    d.rounded_rectangle((302, 226, 722, 510), radius=18, fill=AZUL_TINTA)
+    d.ellipse((586, 270, 650, 334), fill=DORADO)
+    d.polygon(
+        [(322, 478), (430, 354), (518, 438), (578, 374), (704, 496)],
+        fill=(245, 248, 252, 255),
+    )
+    d.rounded_rectangle((326, 548, 570, 574), radius=13, fill=AZUL_TINTA)
+    d.rounded_rectangle((188, 588, 836, 762), radius=46, fill=BLANCO)
+    d.rounded_rectangle((250, 634, 774, 674), radius=20, fill=AZUL_TINTA)
+    d.rounded_rectangle((278, 708, 746, 742), radius=17, fill=(213, 226, 240, 255))
+    d.rounded_rectangle((218, 590, 806, 620), radius=15, fill=DORADO)
+    d.ellipse((754, 696, 786, 728), fill=DORADO)
 
 
-def _barra_escaner(img):
-    """Barra de luz verde cruzando el icono, con halo hacia abajo."""
-    capa = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-    d = ImageDraw.Draw(capa)
-    y = int(S * 0.585)
-    margen = int(S * 0.075)
-    # Halo: bandas consecutivas que se desvanecen bajo la barra
-    alto_banda = 34
-    for i, a in enumerate((84, 56, 32, 14)):
-        d.rectangle((margen, y + i * alto_banda,
-                     S - margen, y + (i + 1) * alto_banda),
-                    fill=VERDE_LUZ + (a,))
-    # Barra principal
-    d.rounded_rectangle((margen, y - 16, S - margen, y + 16),
-                        radius=16, fill=VERDE_LUZ + (255,))
-    # Brillo superior fino
-    d.rounded_rectangle((margen + 8, y - 16, S - margen - 8, y - 8),
-                        radius=4, fill=(214, 255, 236, 160))
-    img.alpha_composite(capa)
+def _marca_verificacion(destino: Path) -> None:
+    imagen = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+    ImageDraw.Draw(imagen).line(
+        [(14, 34), (27, 47), (50, 18)],
+        fill=(255, 255, 255, 255),
+        width=9,
+        joint="curve",
+    )
+    imagen.resize((16, 16), Image.Resampling.LANCZOS).save(destino / "check.png")
 
 
-def _marca_verificacion():
-    """check.png: marca blanca para las casillas marcadas (vía QSS)."""
-    t = 64
-    img = Image.new("RGBA", (t, t), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    d.line([(14, 34), (27, 47), (50, 18)], fill=(255, 255, 255, 255),
-           width=9, joint="curve")
-    img.resize((16, 16), Image.Resampling.LANCZOS).save("check.png")
-
-
-def generar():
-    img = _fondo_degradado()
-    doc = _con_sombra(_documento())
-    img.alpha_composite(doc, ((S - doc.width) // 2, (S - doc.height) // 2 - 10))
-    _barra_escaner(img)
-
-    img.resize((256, 256), Image.Resampling.LANCZOS).save("icono.png")
-    img.save("icono.ico", sizes=[(256, 256), (128, 128), (64, 64),
-                                 (48, 48), (32, 32), (24, 24), (16, 16)])
-    _marca_verificacion()
-    print("Generados icono.png, icono.ico y check.png")
+def generar() -> None:
+    destino = Path(__file__).resolve().parent
+    icono = _fondo()
+    _pictograma(icono)
+    icono.resize((512, 512), Image.Resampling.LANCZOS).save(destino / "icono.png")
+    icono.save(
+        destino / "icono.ico",
+        sizes=[(256, 256), (128, 128), (64, 64), (48, 48), (32, 32), (24, 24), (16, 16)],
+    )
+    _marca_verificacion(destino)
 
 
 if __name__ == "__main__":

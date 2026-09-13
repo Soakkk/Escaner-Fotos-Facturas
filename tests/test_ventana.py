@@ -317,3 +317,35 @@ def test_instalar_actualizacion_guarda_sesion_antes_de_lanzar(monkeypatch):
         ("instalador", "/tmp/EscanerFotos-Setup.exe"),
         "quit",
     ]
+
+
+def test_shell_tiene_zonas_y_acciones_principales_identificables():
+    ventana = ef.VentanaPrincipal()
+
+    for nombre in (
+        "cabecera",
+        "zonaOriginal",
+        "panelControles",
+        "zonaResultado",
+        "accionAbrir",
+        "accionPegar",
+        "btnPrimario",
+        "btnEnviar",
+    ):
+        assert ventana.findChild(ef.QWidget, nombre) is not None, nombre
+
+
+def test_cabecera_adapta_acciones_en_ancho_portatil():
+    ventana = ef.VentanaPrincipal()
+    ventana.show()
+    ventana.resize(1500, 900)
+    _app.processEvents()
+    assert not ventana.accion_abrir_cabecera.isHidden()
+    assert not ventana.accion_pegar_cabecera.isHidden()
+
+    ventana.resize(1000, 760)
+    _app.processEvents()
+
+    assert ventana.accion_abrir_cabecera.isHidden()
+    assert ventana.accion_pegar_cabecera.isHidden()
+    assert ventana.findChild(ef.QGroupBox, "masOpciones") is not None
