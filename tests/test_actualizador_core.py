@@ -123,3 +123,18 @@ def test_programar_instalacion_usa_modo_silencioso(monkeypatch):
             "/NORESTART",
         ], {"close_fds": True})
     ]
+
+
+def test_comprobacion_manual_recibe_el_error_de_red(monkeypatch):
+    eventos = []
+    monkeypatch.setattr(
+        actualizador,
+        "urlopen",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("sin red")),
+    )
+    hilo = actualizador.HiloComprobar("2.14")
+    hilo.finalizada.connect(eventos.append)
+
+    hilo.run()
+
+    assert eventos == ["error"]

@@ -407,9 +407,18 @@ class VentanaPrincipal(QMainWindow):
             ).decode("ascii")
             for i in range(self.lista_pdf.count())
         ]
+        foto_embebida = ""
+        if self.imagen_original is not None and not self._ruta_actual:
+            ok, buffer_png = cv2.imencode(
+                ".png", self.imagen_original,
+                [cv2.IMWRITE_PNG_COMPRESSION, 3],
+            )
+            if ok:
+                foto_embebida = base64.b64encode(buffer_png.tobytes()).decode("ascii")
         filtro, brillo, contraste, nitidez, intensidad = self._params()
         return {
             "foto_actual": self._ruta_actual,
+            "foto_actual_png": foto_embebida,
             "foto_fallida": self._ruta_fallida_actual,
             "errores_cola": dict(self._errores_cola),
             "cola": list(self.cola),
@@ -440,7 +449,18 @@ class VentanaPrincipal(QMainWindow):
         self._restaurando_sesion = True
         try:
             ruta_actual = datos.get("foto_actual", "")
-            if ruta_actual and os.path.isfile(ruta_actual):
+            foto_embebida = datos.get("foto_actual_png", "")
+            if foto_embebida:
+                try:
+                    buffer_png = base64.b64decode(foto_embebida, validate=True)
+                    imagen = cv2.imdecode(
+                        np.frombuffer(buffer_png, dtype=np.uint8), cv2.IMREAD_COLOR
+                    )
+                except (ValueError, TypeError):
+                    imagen = None
+                if imagen is not None:
+                    self._cargar_cv(imagen)
+            elif ruta_actual and os.path.isfile(ruta_actual):
                 self._cargar_archivo(ruta_actual)
             self._ruta_fallida_actual = str(datos.get("foto_fallida", ""))
             self._errores_cola = dict(datos.get("errores_cola", {}))
@@ -480,11 +500,10 @@ class VentanaPrincipal(QMainWindow):
 
             for pagina in datos.get("paginas", []):
                 try:
-                    imagen = decodificar_pagina(base64.b64decode(pagina, validate=True))
+                    datos_pagina = base64.b64decode(pagina, validate=True)
                 except (ValueError, TypeError):
                     continue
-                if imagen is not None:
-                    self._insertar_pagina(imagen)
+                self._insertar_pagina_codificada(datos_pagina)
             self._actualizar_indicador_cola()
             self.actualizar_procesado()
         finally:
@@ -1258,6 +1277,13 @@ class VentanaPrincipal(QMainWindow):
         btn_vigilada.clicked.connect(self.elegir_carpeta_vigilada)
         fila_vig.addWidget(btn_vigilada)
         l_mas.addLayout(fila_vig)
+        self.btn_comprobar_actualizaciones = QPushButton(
+            "Comprobar actualizaciones"
+        )
+        self.btn_comprobar_actualizaciones.clicked.connect(
+            lambda: actualizador.conectar(self, __version__, manual=True)
+        )
+        l_mas.addWidget(self.btn_comprobar_actualizaciones)
         grupo_mas = self._grupo_plegable("Más opciones", cont_mas, abierto=False)
         grupo_mas.setObjectName("masOpciones")
         panel.addWidget(grupo_mas)
@@ -1795,6 +1821,13 @@ class VentanaPrincipal(QMainWindow):
     def _insertar_pagina(self, img, fila=None):
         """Crea el item de página: miniatura + imagen comprimida en memoria
         (no la imagen entera, que con fotos de móvil son ~35 MB por página)."""
+        self._insertar_pagina_codificada(codificar_pagina(img), fila)
+
+    def _insertar_pagina_codificada(self, datos, fila=None):
+        """Restaura una página conservando exactamente sus bytes comprimidos."""
+        img = decodificar_pagina(datos)
+        if img is None:
+            return
         rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         h, w = rgb.shape[:2]
         qimg = QImage(rgb.data, w, h, 3 * w, QImage.Format.Format_RGB888).copy()
@@ -1802,7 +1835,7 @@ class VentanaPrincipal(QMainWindow):
             80, 104, Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation))
         item = QListWidgetItem(icono, "")
-        item.setData(Qt.ItemDataRole.UserRole, codificar_pagina(img))
+        item.setData(Qt.ItemDataRole.UserRole, bytes(datos))
         if fila is None:
             self.lista_pdf.addItem(item)
         else:

@@ -28,6 +28,7 @@ def esta_empaquetada():
 class HiloComprobar(QThread):
     """Comprueba si hay versión nueva (rápido). Emite (version, url, size, url_sha256)."""
     encontrada = Signal(str, str, int, str)
+    finalizada = Signal(str)
 
     def __init__(self, version_local, parent=None):
         super().__init__(parent)
@@ -41,13 +42,16 @@ class HiloComprobar(QThread):
 
             tag = release.get("tag_name", "")
             if not es_mas_nueva(tag, self.version_local):
+                self.finalizada.emit("sin_actualizacion")
                 return
 
             asset = elegir_asset_exe(release)
             if not asset:
+                self.finalizada.emit("error")
                 return
             size = int(asset.get("size") or 0)
             if size <= 0:
+                self.finalizada.emit("error")
                 return
 
             asset_sha = elegir_asset_sha256(release)
@@ -57,8 +61,9 @@ class HiloComprobar(QThread):
                 tag, asset["browser_download_url"],
                 size, url_sha
             )
+            self.finalizada.emit("encontrada")
         except Exception:
-            pass  # sin internet / error -> silencio
+            self.finalizada.emit("error")
 
 
 class HiloDescarga(QThread):
@@ -172,6 +177,23 @@ def conectar(ventana, version_local, manual=False):
     ventana._estado_actualizacion = "checking"
     hilo = HiloComprobar(version_local, parent=ventana)
     hilo.encontrada.connect(al_encontrar)
+
+    def al_finalizar(resultado):
+        if resultado == "error":
+            ventana._estado_actualizacion = "error"
+            if manual:
+                ventana.statusBar().showMessage(
+                    "No se pudieron comprobar las actualizaciones; "
+                    "comprueba la conexión",
+                    7000,
+                )
+        elif resultado == "sin_actualizacion" and manual:
+            ventana.statusBar().showMessage(
+                "Ya tienes la última versión disponible",
+                5000,
+            )
+
+    hilo.finalizada.connect(al_finalizar)
     hilo.start()
     ventana._hilo_comprobar = hilo  # evita que el GC lo recoja
 

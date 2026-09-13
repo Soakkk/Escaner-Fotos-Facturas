@@ -206,6 +206,22 @@ def test_sesion_restaura_foto_cola_orden_y_paginas(tmp_path, monkeypatch):
     assert restaurada.cola_pos == 1
     assert restaurada.cola_total == 3
     assert restaurada.lista_pdf.count() == 1
+    assert (
+        restaurada.lista_pdf.item(0).data(Qt.ItemDataRole.UserRole)
+        == primera.lista_pdf.item(0).data(Qt.ItemDataRole.UserRole)
+    )
+
+
+def test_sesion_restaura_sin_perdida_una_foto_pegada(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "estado"))
+    foto = _foto_documento()
+    primera = ef.VentanaPrincipal()
+    primera._cargar_cv(foto)
+    primera._guardar_sesion_actual()
+
+    restaurada = ef.VentanaPrincipal()
+
+    assert np.array_equal(restaurada.imagen_original, foto)
 
 
 def test_reordenar_cola_persiste_el_orden(tmp_path, monkeypatch):
@@ -349,3 +365,41 @@ def test_cabecera_adapta_acciones_en_ancho_portatil():
     assert ventana.accion_abrir_cabecera.isHidden()
     assert ventana.accion_pegar_cabecera.isHidden()
     assert ventana.findChild(ef.QGroupBox, "masOpciones") is not None
+
+
+def test_flujo_completo_foto_pdf_y_apertura_de_aplifisa(tmp_path, monkeypatch):
+    ruta_pdf = tmp_path / "lote.pdf"
+    ejecutable = tmp_path / "FacturasAplifisa.exe"
+    ejecutable.write_bytes(b"")
+    aperturas = []
+    ventana = ef.VentanaPrincipal()
+    ventana._cargar_cv(_foto_documento())
+    ventana.anadir_pagina_pdf(ventana.procesada_full())
+    monkeypatch.setattr(ventana, "_elegir_ruta_pdf_lote", lambda: str(ruta_pdf))
+    monkeypatch.setattr(ventana, "_ejecutable_aplifisa", lambda: str(ejecutable))
+    monkeypatch.setattr(
+        ef, "lanzar_aplifisa", lambda exe, pdf: aperturas.append((exe, pdf))
+    )
+    monkeypatch.setattr(ef.QMessageBox, "information", lambda *args: None)
+
+    ventana.enviar_a_aplifisa()
+
+    assert ruta_pdf.read_bytes().startswith(b"%PDF")
+    assert aperturas == [(str(ejecutable), str(ruta_pdf))]
+
+
+def test_comprobacion_manual_de_actualizaciones_es_explicita(monkeypatch):
+    ventana = ef.VentanaPrincipal()
+    llamadas = []
+    monkeypatch.setattr(
+        ef.actualizador,
+        "conectar",
+        lambda destino, version, manual=False: llamadas.append(
+            (destino, version, manual)
+        ),
+    )
+
+    ventana.findChild(ef.QGroupBox, "masOpciones").setChecked(True)
+    ventana.btn_comprobar_actualizaciones.click()
+
+    assert llamadas == [(ventana, ef.__version__, True)]
