@@ -90,7 +90,8 @@ class HiloDescarga(QThread):
         return esperado
 
     def run(self):
-        destino = os.path.join(tempfile.gettempdir(), "EscanerFotos-Setup.exe")
+        carpeta = tempfile.mkdtemp(prefix="EscanerFotos-update-")
+        destino = os.path.join(carpeta, "EscanerFotos-Setup.exe")
         temporal = destino + ".part"
         try:
             esperado = self._hash_esperado()
@@ -144,6 +145,13 @@ def conectar(ventana, version_local, manual=False):
     """Comprueba y descarga en segundo plano; deja el Setup listo en la UI."""
     if not esta_empaquetada():
         return
+    if getattr(ventana, "_actualizacion_en_curso", False):
+        if manual:
+            ventana.statusBar().showMessage("Ya hay una comprobación o descarga en curso", 5000)
+        return
+    if getattr(ventana, "_ruta_update_lista", ""):
+        return
+    ventana._actualizacion_en_curso = True
 
     def al_encontrar(version, url, size, url_sha):
         ventana._estado_actualizacion = "downloading"
@@ -151,6 +159,7 @@ def conectar(ventana, version_local, manual=False):
         hilo_dl = HiloDescarga(url, size, url_sha, parent=ventana)
 
         def on_terminado(ruta):
+            ventana._actualizacion_en_curso = False
             if not ruta:
                 ventana._estado_actualizacion = "error"
                 if manual:
@@ -179,6 +188,8 @@ def conectar(ventana, version_local, manual=False):
     hilo.encontrada.connect(al_encontrar)
 
     def al_finalizar(resultado):
+        if resultado != "encontrada":
+            ventana._actualizacion_en_curso = False
         if resultado == "error":
             ventana._estado_actualizacion = "error"
             if manual:

@@ -138,3 +138,63 @@ def test_comprobacion_manual_recibe_el_error_de_red(monkeypatch):
     hilo.run()
 
     assert eventos == ["error"]
+
+
+def test_descargas_solapadas_no_comparten_archivos(tmp_path, monkeypatch):
+    from io import BytesIO
+    from pathlib import Path
+
+    monkeypatch.setattr(actualizador.tempfile, 'tempdir', str(tmp_path))
+    primera = actualizador.HiloDescarga('https://release/uno', 4)
+    segunda = actualizador.HiloDescarga('https://release/dos', 4)
+    resultados_uno, resultados_dos = [], []
+    primera.terminado.connect(resultados_uno.append)
+    segunda.terminado.connect(resultados_dos.append)
+
+    class RespuestaSolapada(BytesIO):
+        iniciada = False
+        def read(self, *args):
+            if not self.iniciada:
+                self.iniciada = True
+                segunda.run()
+            return super().read(*args)
+
+    monkeypatch.setattr(actualizador, 'urlopen', lambda req, **kw:
+                        RespuestaSolapada(b'AAAA') if req.full_url.endswith('uno')
+                        else BytesIO(b'BBBB'))
+    primera.run()
+
+    assert resultados_uno and resultados_uno[0]
+    assert resultados_dos and resultados_dos[0]
+    assert resultados_uno[0] != resultados_dos[0]
+    assert Path(resultados_uno[0]).read_bytes() == b'AAAA'
+    assert Path(resultados_dos[0]).read_bytes() == b'BBBB'
+    assert not list(tmp_path.rglob('*.part'))
+
+
+def test_comprobaciones_repetidas_comparten_un_solo_ciclo(monkeypatch):
+    from PySide6.QtCore import QObject
+
+    class Ventana(QObject):
+        def statusBar(self):
+            return self
+        def showMessage(self, *args):
+            pass
+
+    ventana = Ventana()
+    comprobaciones, descargas = [], []
+    monkeypatch.setattr(actualizador, 'esta_empaquetada', lambda: True)
+    monkeypatch.setattr(actualizador.HiloComprobar, 'start', lambda hilo: comprobaciones.append(hilo))
+    monkeypatch.setattr(actualizador.HiloDescarga, 'start', lambda hilo: descargas.append(hilo))
+    actualizador.conectar(ventana, '2.14')
+    actualizador.conectar(ventana, '2.14', manual=True)
+    assert len(comprobaciones) == 1
+
+    comprobaciones[0].encontrada.emit('2.15', 'https://release/setup', 4, '')
+    comprobaciones[0].finalizada.emit('encontrada')
+    actualizador.conectar(ventana, '2.14', manual=True)
+    assert len(comprobaciones) == 1
+    assert len(descargas) == 1
+    descargas[0].terminado.emit('')
+    actualizador.conectar(ventana, '2.14', manual=True)
+    assert len(comprobaciones) == 2
