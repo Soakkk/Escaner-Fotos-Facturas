@@ -6,6 +6,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import numpy as np
 import cv2
+import pytest
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt
 
@@ -13,6 +14,7 @@ _app = QApplication.instance() or QApplication([])
 
 import escaner_fotos as ef
 from suite_storage import fusionar_cliente
+from precalculo import calcular_precalculo
 
 
 def _foto_documento():
@@ -403,3 +405,23 @@ def test_comprobacion_manual_de_actualizaciones_es_explicita(monkeypatch):
     ventana.btn_comprobar_actualizaciones.click()
 
     assert llamadas == [(ventana, ef.__version__, True)]
+
+
+@pytest.mark.parametrize('cambio', ['rotar', 'sustituir'])
+def test_propuesta_tardia_no_recorta_pixeles_distintos(tmp_path, cambio):
+    ruta = _crear_fotos(tmp_path, 1)[0]
+    propuesta = calcular_precalculo(ruta)
+    ventana = ef.VentanaPrincipal()
+    ventana._cargar_archivo(ruta)
+    if cambio == 'rotar':
+        ventana.rotar_original(90)
+    else:
+        ventana._cargar_cv(cv2.resize(_foto_documento(), (700, 525)), ruta_actual=ruta)
+    # Un trabajo iniciado antes del cambio puede terminar después de él.
+    ventana._al_terminar_precalculo(propuesta)
+    puntos = ef.detectar_documento(ventana.imagen_original)
+    esperado = ef.corregir_perspectiva(ventana.imagen_original, puntos)
+
+    ventana.detectar_auto(silencioso=True)
+
+    assert np.array_equal(ventana.imagen_enderezada, esperado)

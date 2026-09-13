@@ -70,7 +70,7 @@ from imagen import (
 from cola import rutas_unicas_en_orden, siguiente_de_cola, texto_cola
 from integracion_aplifisa import lanzar_aplifisa, localizar_aplifisa
 from perfiles import PerfilEscaneo, cargar_perfiles, guardar_perfil
-from precalculo import PrecalculoResultado, TrabajadorPrecalculo
+from precalculo import PrecalculoResultado, TrabajadorPrecalculo, firma_imagen
 from sesion_trabajo import guardar_sesion, leer_sesion
 from suite_storage import leer_clientes
 from vigilancia import ArchivoObservado, identidad_archivo
@@ -763,6 +763,13 @@ class VentanaPrincipal(QMainWindow):
 
     def _al_terminar_precalculo(self, resultado: PrecalculoResultado):
         self._precalculos[resultado.ruta] = resultado
+
+    def _propuesta_actual(self):
+        propuesta = self._precalculos.get(self._ruta_actual)
+        if (propuesta is not None and self.imagen_original is not None
+                and propuesta.firma_imagen == firma_imagen(self.imagen_original)):
+            return propuesta
+        return None
 
     def _al_finalizar_hilo_precalculo(self):
         trabajador = self._trabajador_precalculo
@@ -1465,7 +1472,7 @@ class VentanaPrincipal(QMainWindow):
             self.statusBar().showMessage("Primero abre una imagen para auto-orientar", 3000)
             return
         base = self.imagen_enderezada if self.imagen_enderezada is not None else self.imagen_original
-        propuesta = self._precalculos.get(self._ruta_actual)
+        propuesta = self._propuesta_actual()
         if propuesta is not None and self.imagen_enderezada is None:
             grados = propuesta.rotacion
         else:
@@ -1521,7 +1528,7 @@ class VentanaPrincipal(QMainWindow):
             if not silencioso:
                 QMessageBox.warning(self, "Atención", "Primero abre una imagen.")
             return
-        propuesta = self._precalculos.get(self._ruta_actual)
+        propuesta = self._propuesta_actual()
         puntos = propuesta.puntos if propuesta is not None else detectar_documento(
             self.imagen_original
         )

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 
 from PySide6.QtCore import QThread, Signal
 
@@ -20,6 +21,13 @@ class PrecalculoResultado:
     miniatura: object
     puntos: object | None
     rotacion: int
+    firma_imagen: str = ""
+
+
+def firma_imagen(imagen) -> str:
+    digestor = hashlib.sha256(str((imagen.shape, imagen.dtype)).encode('ascii'))
+    digestor.update(imagen.tobytes())
+    return digestor.hexdigest()
 
 
 def calcular_precalculo(ruta: str, lado_miniatura: int = 96) -> PrecalculoResultado:
@@ -27,7 +35,7 @@ def calcular_precalculo(ruta: str, lado_miniatura: int = 96) -> PrecalculoResult
     miniatura = miniatura_archivo(ruta, lado_miniatura)
     puntos = detectar_documento(imagen)
     _, rotacion = auto_orientar_documento(imagen)
-    return PrecalculoResultado(ruta, miniatura, puntos, int(rotacion))
+    return PrecalculoResultado(ruta, miniatura, puntos, int(rotacion), firma_imagen(imagen))
 
 
 class TrabajadorPrecalculo(QThread):
