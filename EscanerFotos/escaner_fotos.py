@@ -69,8 +69,10 @@ from imagen import (
 )
 from cola import rutas_unicas_en_orden, siguiente_de_cola, texto_cola
 from integracion_aplifisa import lanzar_aplifisa, localizar_aplifisa
+from perfiles import PerfilEscaneo, cargar_perfiles, guardar_perfil
 from precalculo import PrecalculoResultado, TrabajadorPrecalculo
 from sesion_trabajo import guardar_sesion, leer_sesion
+from suite_storage import leer_clientes
 from vigilancia import ArchivoObservado, identidad_archivo
 
 
@@ -331,6 +333,8 @@ class VentanaPrincipal(QMainWindow):
         self._ruta_actual = ""
         self._ruta_fallida_actual = ""
         self._errores_cola = {}
+        self._perfiles = cargar_perfiles()
+        self._perfil_actual = "Factura"
         self._restaurando_sesion = False
 
         self.cola = []
@@ -418,6 +422,7 @@ class VentanaPrincipal(QMainWindow):
             },
             "destino": self.carpeta_salida,
             "prefijo": self.txt_prefijo.text(),
+            "perfil": self._perfil_actual,
         }
 
     def _guardar_sesion_actual(self):
@@ -463,6 +468,11 @@ class VentanaPrincipal(QMainWindow):
             self.cont_intensidad.setVisible(self.combo_filtro.currentIndex() <= 1)
             self.carpeta_salida = str(datos.get("destino", self.carpeta_salida))
             self.txt_prefijo.setText(str(datos.get("prefijo", self.txt_prefijo.text())))
+            nombre_perfil = str(datos.get("perfil", self._perfil_actual))
+            indice_perfil = self.combo_perfil.findText(nombre_perfil)
+            if indice_perfil >= 0:
+                self.combo_perfil.setCurrentIndex(indice_perfil)
+                self._perfil_actual = nombre_perfil
             self._actualizar_label_carpeta()
 
             for pagina in datos.get("paginas", []):
@@ -506,6 +516,7 @@ class VentanaPrincipal(QMainWindow):
     # ----------------------------------------------------------
 
     def _actualizar_barra_estado(self):
+        self._actualizar_finalizacion()
         if hasattr(self, "btn_quitar"):
             self.btn_quitar.setEnabled(self.imagen_original is not None)
         if self.imagen_original is None:
@@ -524,6 +535,13 @@ class VentanaPrincipal(QMainWindow):
             partes.append(f"PDF: {self.lista_pdf.count()} pág.")
         partes.append("Enter: Guardado rápido  |  Ctrl+S: JPG  Ctrl+Shift+S: PDF")
         self.statusBar().showMessage("   |   ".join(partes))
+
+    def _actualizar_finalizacion(self):
+        if not hasattr(self, "panel_finalizacion"):
+            return
+        hay_paginas = self.lista_pdf.count() > 0
+        self.panel_finalizacion.setVisible(hay_paginas)
+        self.btn_deshacer_ultima.setEnabled(hay_paginas)
 
     # ----------------------------------------------------------
     # Drag & drop sobre la ventana principal
@@ -892,7 +910,6 @@ class VentanaPrincipal(QMainWindow):
         centro_layout.setContentsMargins(0, 0, 0, 0)
         centro_layout.setSpacing(8)
         centro_layout.addWidget(scroll_ctrl, 1)
-        centro_layout.addWidget(self.btn_enviar_aplifisa)
         centro.setMinimumWidth(360)
         centro.setMaximumWidth(410)
 
@@ -921,6 +938,27 @@ class VentanaPrincipal(QMainWindow):
         ayuda.setWordWrap(True)
         panel.addWidget(titulo)
         panel.addWidget(ayuda)
+
+        contexto = QGroupBox("Perfil y cliente")
+        contexto_layout = QVBoxLayout(contexto)
+        fila_perfil = QHBoxLayout()
+        fila_perfil.addWidget(QLabel("Perfil:"))
+        self.combo_perfil = QComboBox()
+        self.combo_perfil.addItems(self._perfiles)
+        fila_perfil.addWidget(self.combo_perfil, 1)
+        self.btn_guardar_perfil = QPushButton("Guardar ajustes")
+        fila_perfil.addWidget(self.btn_guardar_perfil)
+        contexto_layout.addLayout(fila_perfil)
+        fila_cliente = QHBoxLayout()
+        fila_cliente.addWidget(QLabel("Cliente:"))
+        self.combo_cliente = QComboBox()
+        self.combo_cliente.addItem("Sin cliente", None)
+        for nif, cliente in leer_clientes().items():
+            nombre = cliente.get("nombre") or nif
+            self.combo_cliente.addItem(f"{nombre} · {nif}", cliente)
+        fila_cliente.addWidget(self.combo_cliente, 1)
+        contexto_layout.addLayout(fila_cliente)
+        panel.addWidget(contexto)
 
         # === Entrada rápida ===
         g1 = QGroupBox("Entrada rápida")
@@ -1134,16 +1172,26 @@ class VentanaPrincipal(QMainWindow):
             "sola hoja A4: cara delantera arriba y trasera abajo.")
         btn_dni.clicked.connect(self.combinar_dni)
         l6.addWidget(btn_dni)
-        btn_exp_pdf = QPushButton("Exportar el PDF…")
-        btn_exp_pdf.setMinimumHeight(36)
-        btn_exp_pdf.clicked.connect(self.exportar_pdf_multipagina)
-        l6.addWidget(btn_exp_pdf)
+        self.panel_finalizacion = QFrame()
+        self.panel_finalizacion.setObjectName("panelFinalizacion")
+        acciones_finales = QVBoxLayout(self.panel_finalizacion)
+        acciones_finales.setContentsMargins(0, 8, 0, 0)
+        self.btn_exportar_lote = QPushButton("Exportar PDF…")
+        self.btn_exportar_lote.setMinimumHeight(36)
+        self.btn_exportar_lote.clicked.connect(self.exportar_pdf_multipagina)
+        acciones_finales.addWidget(self.btn_exportar_lote)
         self.btn_enviar_aplifisa = QPushButton("Enviar a Facturas a Aplifisa")
         self.btn_enviar_aplifisa.setObjectName("btnEnviar")
         self.btn_enviar_aplifisa.setMinimumHeight(46)
         self.btn_enviar_aplifisa.setToolTip(
             "Guarda el PDF y abre Facturas a Aplifisa con el lote ya cargado.")
         self.btn_enviar_aplifisa.clicked.connect(self.enviar_a_aplifisa)
+        acciones_finales.addWidget(self.btn_enviar_aplifisa)
+        self.btn_deshacer_ultima = QPushButton("Deshacer última página")
+        self.btn_deshacer_ultima.clicked.connect(self.deshacer_ultima_pagina)
+        acciones_finales.addWidget(self.btn_deshacer_ultima)
+        self.panel_finalizacion.setVisible(False)
+        l6.addWidget(self.panel_finalizacion)
         panel.addWidget(g6)
 
         panel.addWidget(self._grupo_plegable(
@@ -1167,6 +1215,10 @@ class VentanaPrincipal(QMainWindow):
         fila_vig.addWidget(btn_vigilada)
         l_mas.addLayout(fila_vig)
         panel.addWidget(self._grupo_plegable("Más opciones", cont_mas, abierto=False))
+
+        self.combo_perfil.currentTextChanged.connect(self._aplicar_perfil)
+        self.btn_guardar_perfil.clicked.connect(self._guardar_perfil_actual)
+        self.combo_cliente.currentIndexChanged.connect(self._al_seleccionar_cliente)
 
         panel.addStretch()
 
@@ -1512,6 +1564,56 @@ class VentanaPrincipal(QMainWindow):
         self.cont_intensidad.setVisible(idx <= 1)
         self.actualizar_procesado()
 
+    def _aplicar_perfil(self, nombre):
+        perfil = self._perfiles.get(nombre)
+        if perfil is None:
+            return
+        self._perfil_actual = nombre
+        controles = (
+            (self.combo_filtro, perfil.filtro),
+            (self.sld_intensidad_bn, perfil.intensidad),
+            (self.sld_brillo, perfil.brillo),
+            (self.sld_contraste, perfil.contraste),
+            (self.sld_nitidez, perfil.nitidez),
+        )
+        for control, valor in controles:
+            control.blockSignals(True)
+            if isinstance(control, QComboBox):
+                control.setCurrentIndex(valor)
+            else:
+                control.setValue(valor)
+            control.blockSignals(False)
+        self.cont_intensidad.setVisible(perfil.filtro <= 1)
+        if perfil.destino:
+            self.carpeta_salida = perfil.destino
+            self._actualizar_label_carpeta()
+        self.actualizar_procesado()
+        self._guardar_sesion_actual()
+
+    def _guardar_perfil_actual(self):
+        nombre = self.combo_perfil.currentText() or "Factura"
+        filtro, brillo, contraste, nitidez, intensidad = self._params()
+        perfil = PerfilEscaneo(
+            nombre, filtro, intensidad, brillo, contraste, nitidez,
+            self.carpeta_salida,
+        )
+        guardar_perfil(perfil)
+        self._perfiles[nombre] = perfil
+        self.statusBar().showMessage(f"Perfil {nombre} guardado", 3000)
+
+    def _al_seleccionar_cliente(self, indice):
+        cliente = self.combo_cliente.itemData(indice)
+        if not cliente:
+            return
+        sugerencia = cliente.get("nombre") or cliente.get("nif", "")
+        if sugerencia:
+            self.txt_prefijo.setText(str(sugerencia))
+        carpeta = cliente.get("carpeta") or cliente.get("destino")
+        if carpeta:
+            self.carpeta_salida = str(carpeta)
+            self._actualizar_label_carpeta()
+        self._guardar_sesion_actual()
+
     # ----------------------------------------------------------
     # Guardado rápido (carpeta fija + nombre por fecha-hora)
     # ----------------------------------------------------------
@@ -1660,6 +1762,14 @@ class VentanaPrincipal(QMainWindow):
         else:
             self.lista_pdf.insertItem(fila, item)
         self.lista_pdf.setCurrentItem(item)
+
+    def deshacer_ultima_pagina(self):
+        if not self.lista_pdf.count():
+            return
+        self.lista_pdf.takeItem(self.lista_pdf.count() - 1)
+        self._actualizar_barra_estado()
+        self._guardar_sesion_actual()
+        self.statusBar().showMessage("Última página retirada del lote", 3000)
 
     def quitar_pagina_pdf(self):
         filas = sorted((self.lista_pdf.row(it)

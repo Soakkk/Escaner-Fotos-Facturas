@@ -12,6 +12,7 @@ from PySide6.QtCore import Qt
 _app = QApplication.instance() or QApplication([])
 
 import escaner_fotos as ef
+from suite_storage import fusionar_cliente
 
 
 def _foto_documento():
@@ -257,3 +258,41 @@ def test_vigilancia_encola_solo_despues_de_dos_firmas_estables(tmp_path, monkeyp
     ventana._procesar_carpeta_vigilada()
 
     assert ventana._ruta_actual == str(nueva)
+
+
+def test_seleccionar_cliente_sugiere_prefijo_y_carpeta(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "estado"))
+    destino = str(tmp_path / "Cliente Ana")
+    fusionar_cliente(
+        {"nif": "12345678Z", "nombre": "Ana López", "carpeta": destino},
+        "directorio_compartido",
+    )
+    ventana = ef.VentanaPrincipal()
+
+    ventana.combo_cliente.setCurrentIndex(1)
+
+    assert ventana.txt_prefijo.text() == "Ana López"
+    assert ventana.carpeta_salida == destino
+
+
+def test_perfil_dni_aplica_color_sin_procesar_la_imagen():
+    ventana = ef.VentanaPrincipal()
+
+    ventana._aplicar_perfil("DNI")
+
+    assert ventana.combo_filtro.currentIndex() == 2
+    assert ventana.sld_intensidad_bn.value() == 50
+    assert ventana.imagen_original is None
+
+
+def test_finalizacion_permite_deshacer_la_ultima_pagina():
+    ventana = ef.VentanaPrincipal()
+    ventana._cargar_cv(_foto_documento())
+    ventana.anadir_pagina_pdf(ventana.procesada_full())
+
+    assert not ventana.panel_finalizacion.isHidden()
+    assert ventana.btn_deshacer_ultima.isEnabled()
+    ventana.deshacer_ultima_pagina()
+
+    assert ventana.lista_pdf.count() == 0
+    assert ventana.panel_finalizacion.isHidden()
