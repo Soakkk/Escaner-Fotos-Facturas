@@ -523,3 +523,37 @@ def test_interrupcion_antes_del_avance_conserva_sesion_anterior(tmp_path, monkey
         ventana.terminar_y_siguiente()
 
     assert leer_sesion() == anterior
+
+
+def test_errores_saltados_siguen_accesibles_al_terminar_y_restaurar(tmp_path, monkeypatch):
+    monkeypatch.setattr(ef.QMessageBox, 'critical', lambda *args: None)
+    monkeypatch.setattr(ef.QMessageBox, 'information', lambda *args: None)
+    buena = _crear_fotos(tmp_path, 1)[0]
+    fallidas = [str(tmp_path / 'falta.png'), str(tmp_path / 'rota.png')]
+    ventana = ef.VentanaPrincipal()
+    ventana._iniciar_cola([buena, *fallidas])
+    ventana.terminar_y_siguiente()
+
+    assert ventana._ruta_actual == ''
+    assert ventana.procesada_full() is None
+    ventana._saltar_actual()
+    ventana._saltar_actual()
+    restaurada = ef.VentanaPrincipal()
+
+    assert restaurada.lista_pdf.count() == 1
+    assert not restaurada.grupo_cola.isHidden()
+    assert restaurada.btn_reintentar.isEnabled()
+    assert restaurada.combo_fallidas.count() == 2
+    assert restaurada.combo_fallidas.itemData(0) == fallidas[0]
+    assert restaurada.combo_fallidas.itemData(1) == fallidas[1]
+    assert restaurada._posiciones_fallidas == {fallidas[0]: 2, fallidas[1]: 3}
+
+    cv2.imwrite(fallidas[0], _foto_documento())
+    restaurada.combo_fallidas.setCurrentIndex(0)
+    restaurada.reintentar_actual()
+
+    assert restaurada._ruta_actual == fallidas[0]
+    assert restaurada.procesada_full() is not None
+    assert restaurada.combo_fallidas.count() == 1
+    assert restaurada.combo_fallidas.itemData(0) == fallidas[1]
+    assert restaurada.lista_pdf.count() == 1

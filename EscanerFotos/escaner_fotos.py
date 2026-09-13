@@ -333,6 +333,7 @@ class VentanaPrincipal(QMainWindow):
         self._ruta_actual = ""
         self._ruta_fallida_actual = ""
         self._errores_cola = {}
+        self._posiciones_fallidas = {}
         self._perfiles = cargar_perfiles()
         self._perfil_actual = "Factura"
         self._estado_actualizacion = "checking"
@@ -431,6 +432,7 @@ class VentanaPrincipal(QMainWindow):
             },
             "foto_fallida": self._ruta_fallida_actual,
             "errores_cola": dict(self._errores_cola),
+            "posiciones_fallidas": dict(self._posiciones_fallidas),
             "cola": list(self.cola),
             "cola_total": self.cola_total,
             "cola_pos": self.cola_pos,
@@ -491,10 +493,11 @@ class VentanaPrincipal(QMainWindow):
                 self._actualizar_preview_base()
             self._ruta_fallida_actual = str(datos.get("foto_fallida", ""))
             self._errores_cola = dict(datos.get("errores_cola", {}))
+            self._posiciones_fallidas = dict(datos.get("posiciones_fallidas", {}))
             if hasattr(self, "btn_reintentar"):
                 self.btn_reintentar.setEnabled(bool(self._ruta_fallida_actual))
 
-            self.cola = [r for r in datos.get("cola", []) if os.path.isfile(r)]
+            self.cola = list(datos.get("cola", []))
             self.cola_total = int(datos.get("cola_total", len(self.cola)))
             self.cola_pos = int(datos.get("cola_pos", 1 if ruta_actual else 0))
             if self.cola_total < len(self.cola) + (1 if self._ruta_actual else 0):
@@ -718,6 +721,8 @@ class VentanaPrincipal(QMainWindow):
             self._cargar_siguiente_de_cola()
         else:
             self.statusBar().showMessage("No hay más fotos en la cola", 3000)
+        self._actualizar_indicador_cola()
+        self._guardar_sesion_actual()
 
     def _vaciar_cola(self):
         """Descarta las fotos que quedan en cola (no toca la foto actual ni el PDF)."""
@@ -734,7 +739,19 @@ class VentanaPrincipal(QMainWindow):
         # El grupo se ve mientras haya una tanda activa (aunque en la última
         # foto ya no queden pendientes), para no perder el "Foto X de Y".
         self.lbl_cola.setText(texto_cola(self.cola_pos, self.cola_total))
-        self.grupo_cola.setVisible(self.cola_total > 1)
+        self.grupo_cola.setVisible(self.cola_total > 1 or bool(self._errores_cola))
+        seleccion = self._ruta_fallida_actual or self.combo_fallidas.currentData()
+        self.combo_fallidas.clear()
+        for ruta, error in self._errores_cola.items():
+            posicion = self._posiciones_fallidas.get(ruta, '?')
+            self.combo_fallidas.addItem(f"Foto {posicion}: {os.path.basename(ruta)}", ruta)
+            self.combo_fallidas.setItemData(self.combo_fallidas.count() - 1,
+                                           f"{ruta}\n{error}", Qt.ItemDataRole.ToolTipRole)
+        indice = self.combo_fallidas.findData(seleccion)
+        if indice >= 0:
+            self.combo_fallidas.setCurrentIndex(indice)
+        self.combo_fallidas.setVisible(bool(self._errores_cola))
+        self.btn_reintentar.setEnabled(bool(self._errores_cola))
         self._refrescar_miniaturas_cola()
         if self.cola:
             QTimer.singleShot(0, self._iniciar_precalculo_siguiente)
@@ -1106,6 +1123,10 @@ class VentanaPrincipal(QMainWindow):
             "Fotos que faltan por procesar. Arrastra para reordenarlas.")
         self.lista_cola.model().rowsMoved.connect(self._sincronizar_cola_desde_lista)
         lc.addWidget(self.lista_cola)
+        self.combo_fallidas = QComboBox()
+        self.combo_fallidas.setToolTip("Fotos con error: elige una para reintentarla")
+        self.combo_fallidas.setVisible(False)
+        lc.addWidget(self.combo_fallidas)
         fila_cola = QHBoxLayout()
         btn_saltar = QPushButton("Saltar esta")
         btn_saltar.setToolTip("Pasa a la siguiente foto sin añadir esta al PDF.")
@@ -1382,12 +1403,21 @@ class VentanaPrincipal(QMainWindow):
             self._cargar_cv(img, os.path.dirname(ruta), ruta)
             self._ruta_fallida_actual = ""
             self._errores_cola.pop(ruta, None)
-            self.btn_reintentar.setEnabled(False)
+            self._posiciones_fallidas.pop(ruta, None)
+            self._actualizar_indicador_cola()
             self._guardar_sesion_actual()
             return True
         except Exception as e:
             self._ruta_fallida_actual = ruta
             self._errores_cola[ruta] = str(e)
+            self._posiciones_fallidas.setdefault(ruta, self.cola_pos)
+            self.imagen_original = None
+            self.imagen_enderezada = None
+            self._preview_base = None
+            self._ruta_actual = ""
+            self.lienzo_original.limpiar_puntos()
+            self.lienzo_original.mostrar_imagen(None)
+            self.lienzo_resultado.mostrar_imagen(None)
             self.btn_reintentar.setEnabled(True)
             if self.cola:
                 # El resto del lote permanece en su orden; esta foto se puede
@@ -1398,18 +1428,19 @@ class VentanaPrincipal(QMainWindow):
                     f"⚠️ {os.path.basename(ruta)} no se pudo abrir ({e}); "
                     "corrige el archivo y pulsa Reintentar, o sáltalo", 8000)
             else:
-                if self.cola_total:
-                    self.cola_total = 0
-                    self.cola_pos = 0
-                    self._actualizar_indicador_cola()
                 QMessageBox.critical(
                     self, "Error", f"No se pudo abrir la imagen:\n{e}")
+            self._actualizar_indicador_cola()
             self._guardar_sesion_actual()
             return False
 
     def reintentar_actual(self):
-        ruta = self._ruta_fallida_actual
+        ruta = self.combo_fallidas.currentData() or self._ruta_fallida_actual
         if not ruta:
+            return
+        if self.imagen_original is not None:
+            self._encolar([ruta])
+            self.statusBar().showMessage("La foto seleccionada se reintentará en la cola", 4000)
             return
         if self._cargar_archivo(ruta):
             self.statusBar().showMessage(
