@@ -1,4 +1,4 @@
-from cola import siguiente_de_cola, texto_cola
+from cola import rutas_unicas_en_orden, siguiente_de_cola, texto_cola
 
 def test_siguiente_saca_el_primero():
     assert siguiente_de_cola(["a", "b", "c"]) == ("a", ["b", "c"])
@@ -16,3 +16,7 @@ def test_texto_en_mitad_de_la_tanda():
 
 def test_texto_ultima_de_la_tanda():
     assert texto_cola(5, 5) == "✓ Última de la tanda"
+
+
+def test_rutas_unicas_conserva_la_primera_posicion():
+    assert rutas_unicas_en_orden(["a", "b", "a", "c", "b"]) == ["a", "b", "c"]

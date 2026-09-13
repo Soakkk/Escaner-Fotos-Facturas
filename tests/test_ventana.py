@@ -189,3 +189,71 @@ def test_auto_orientar_en_ventana():
     assert base.shape[0] == 1200
     assert base.shape[1] == 800
 
+
+def test_sesion_restaura_foto_cola_orden_y_paginas(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "estado"))
+    rutas = _crear_fotos(tmp_path, 3)
+    primera = ef.VentanaPrincipal()
+    primera._iniciar_cola(rutas)
+    primera.anadir_pagina_pdf(primera.procesada_full())
+    primera._guardar_sesion_actual()
+
+    restaurada = ef.VentanaPrincipal()
+
+    assert restaurada._ruta_actual == rutas[0]
+    assert restaurada.cola == rutas[1:]
+    assert restaurada.cola_pos == 1
+    assert restaurada.cola_total == 3
+    assert restaurada.lista_pdf.count() == 1
+
+
+def test_reordenar_cola_persiste_el_orden(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "estado"))
+    rutas = _crear_fotos(tmp_path, 4)
+    ventana = ef.VentanaPrincipal()
+    ventana._iniciar_cola(rutas)
+    items = [ventana.lista_cola.takeItem(0) for _ in range(ventana.lista_cola.count())]
+    for item in reversed(items):
+        ventana.lista_cola.addItem(item)
+
+    ventana._sincronizar_cola_desde_lista()
+    restaurada = ef.VentanaPrincipal()
+
+    assert restaurada.cola == [rutas[3], rutas[2], rutas[1]]
+
+
+def test_foto_fallida_conserva_posicion_y_permite_reintentar(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "estado"))
+    rota = tmp_path / "rota.png"
+    rota.write_bytes(b"copia incompleta")
+    siguiente = _crear_fotos(tmp_path, 1)[0]
+    ventana = ef.VentanaPrincipal()
+
+    ventana._iniciar_cola([str(rota), siguiente])
+
+    assert ventana._ruta_fallida_actual == str(rota)
+    assert ventana.cola == [siguiente]
+    assert ventana.cola_pos == 1
+    assert ventana.btn_reintentar.isEnabled()
+
+    assert cv2.imwrite(str(rota), _foto_documento())
+    ventana.reintentar_actual()
+
+    assert ventana._ruta_fallida_actual == ""
+    assert ventana._ruta_actual == str(rota)
+    assert ventana.imagen_original is not None
+
+
+def test_vigilancia_encola_solo_despues_de_dos_firmas_estables(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "estado"))
+    ventana = ef.VentanaPrincipal()
+    ventana.carpeta_vigilada = str(tmp_path)
+    ventana.chk_vigilar.setChecked(True)
+    nueva = tmp_path / "nueva.png"
+    assert cv2.imwrite(str(nueva), _foto_documento())
+
+    ventana._procesar_carpeta_vigilada()
+    assert ventana.imagen_original is None
+    ventana._procesar_carpeta_vigilada()
+
+    assert ventana._ruta_actual == str(nueva)

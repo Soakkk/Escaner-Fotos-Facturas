@@ -1,6 +1,17 @@
 """Lógica pura de la cola de fotos (sin Qt)."""
 
 
+def rutas_unicas_en_orden(rutas):
+    """Elimina repeticiones exactas sin cambiar el orden elegido."""
+    vistas = set()
+    unicas = []
+    for ruta in rutas:
+        if ruta not in vistas:
+            vistas.add(ruta)
+            unicas.append(ruta)
+    return unicas
+
+
 def siguiente_de_cola(cola):
     """Saca el primer elemento: devuelve (siguiente, resto).
     Con la cola vacía devuelve (None, [])."""
