@@ -296,3 +296,24 @@ def test_finalizacion_permite_deshacer_la_ultima_pagina():
 
     assert ventana.lista_pdf.count() == 0
     assert ventana.panel_finalizacion.isHidden()
+
+
+def test_instalar_actualizacion_guarda_sesion_antes_de_lanzar(monkeypatch):
+    ventana = ef.VentanaPrincipal()
+    eventos = []
+    ventana._ruta_update_lista = "/tmp/EscanerFotos-Setup.exe"
+    monkeypatch.setattr(ventana, "_guardar_sesion_actual", lambda: eventos.append("sesion"))
+    monkeypatch.setattr(
+        ef.actualizador,
+        "lanzar_instalador",
+        lambda ruta: eventos.append(("instalador", ruta)),
+    )
+    monkeypatch.setattr(ef.QApplication, "quit", lambda: eventos.append("quit"))
+
+    ventana.instalar_actualizacion_lista()
+
+    assert eventos == [
+        "sesion",
+        ("instalador", "/tmp/EscanerFotos-Setup.exe"),
+        "quit",
+    ]

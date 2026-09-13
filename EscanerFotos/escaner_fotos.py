@@ -335,6 +335,9 @@ class VentanaPrincipal(QMainWindow):
         self._errores_cola = {}
         self._perfiles = cargar_perfiles()
         self._perfil_actual = "Factura"
+        self._estado_actualizacion = "checking"
+        self._ruta_update_lista = ""
+        self._version_update_lista = ""
         self._restaurando_sesion = False
 
         self.cola = []
@@ -542,6 +545,22 @@ class VentanaPrincipal(QMainWindow):
         hay_paginas = self.lista_pdf.count() > 0
         self.panel_finalizacion.setVisible(hay_paginas)
         self.btn_deshacer_ultima.setEnabled(hay_paginas)
+
+    def _mostrar_actualizacion_lista(self, version):
+        self.btn_actualizacion_lista.setText(f"Reiniciar y actualizar a {version}")
+        self.btn_actualizacion_lista.setVisible(True)
+        self.statusBar().showMessage(
+            f"Actualización {version} preparada; se instalará cuando tú decidas",
+            8000,
+        )
+
+    def instalar_actualizacion_lista(self):
+        if not self._ruta_update_lista:
+            return
+        self._estado_actualizacion = "installing"
+        self._guardar_sesion_actual()
+        actualizador.lanzar_instalador(self._ruta_update_lista)
+        QApplication.quit()
 
     # ----------------------------------------------------------
     # Drag & drop sobre la ventana principal
@@ -875,6 +894,13 @@ class VentanaPrincipal(QMainWindow):
         btn_abrir_cab.setToolTip("También puedes arrastrar varias fotos sobre la ventana")
         btn_abrir_cab.clicked.connect(self.abrir_imagen)
         lc.addWidget(btn_abrir_cab)
+        self.btn_actualizacion_lista = QPushButton("Reiniciar y actualizar")
+        self.btn_actualizacion_lista.setObjectName("actualizacionLista")
+        self.btn_actualizacion_lista.clicked.connect(
+            self.instalar_actualizacion_lista
+        )
+        self.btn_actualizacion_lista.setVisible(False)
+        lc.addWidget(self.btn_actualizacion_lista)
         raiz.addWidget(cabecera)
 
         contenido = QWidget()
