@@ -39,6 +39,7 @@ v2.7:
 import sys
 import os
 import re
+import base64
 from datetime import datetime
 import cv2
 import numpy as np
@@ -66,8 +67,13 @@ from imagen import (
     componer_dni, detectar_orientacion_texto, auto_orientar_documento,
     detectar_multiples_documentos,
 )
-from cola import siguiente_de_cola, texto_cola
+from cola import rutas_unicas_en_orden, siguiente_de_cola, texto_cola
 from integracion_aplifisa import lanzar_aplifisa, localizar_aplifisa
+from perfiles import PerfilEscaneo, cargar_perfiles, guardar_perfil
+from precalculo import PrecalculoResultado, TrabajadorPrecalculo, firma_imagen
+from sesion_trabajo import guardar_sesion, leer_sesion
+from suite_storage import leer_clientes
+from vigilancia import ArchivoObservado, identidad_archivo
 
 
 def _rutas_imagen_de(mime):
@@ -97,7 +103,7 @@ class LienzoImagen(QLabel):
 
     def __init__(self):
         super().__init__()
-        self.setMinimumSize(450, 500)
+        self.setMinimumSize(280, 400)
         self.setObjectName("lienzo")
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -324,11 +330,24 @@ class VentanaPrincipal(QMainWindow):
         self.imagen_enderezada = None
         self._preview_base = None    # versión reducida para vista previa fluida
         self._ruta_origen = ""       # carpeta del último archivo abierto
+        self._ruta_actual = ""
+        self._ruta_fallida_actual = ""
+        self._errores_cola = {}
+        self._posiciones_fallidas = {}
+        self._perfiles = cargar_perfiles()
+        self._perfil_actual = "Factura"
+        self._estado_actualizacion = "checking"
+        self._ruta_update_lista = ""
+        self._version_update_lista = ""
+        self._restaurando_sesion = False
+        self._transicion_pagina = False
 
         self.cola = []
         self.cola_total = 0
         self.cola_pos = 0
         self._cache_thumbs = {}      # ruta -> QIcon (miniaturas de la cola)
+        self._precalculos = {}
+        self._trabajador_precalculo = None
 
         # Generador de miniaturas de la cola, una por disparo (no bloquea la UI)
         self._timer_thumbs = QTimer(self)
@@ -344,6 +363,8 @@ class VentanaPrincipal(QMainWindow):
         # entran solas a la cola sin tener que arrastrarlas.
         self.carpeta_vigilada = self.settings.value("carpeta_vigilada", "", str)
         self._vistos = set()
+        self._identidades_vistas = set()
+        self._observados = {}
         self._watcher = QFileSystemWatcher(self)
         self._watcher.directoryChanged.connect(self._al_cambiar_carpeta_vigilada)
         # Espera a que el archivo termine de copiarse antes de encolarlo
@@ -361,6 +382,7 @@ class VentanaPrincipal(QMainWindow):
         self._crear_interfaz()
         self._crear_atajos()
         self._restaurar_preferencias()
+        self._restaurar_sesion()
         self._actualizar_barra_estado()
 
     def _restaurar_preferencias(self):
@@ -379,6 +401,156 @@ class VentanaPrincipal(QMainWindow):
         if self.settings.value("vigilar", False, bool) \
                 and os.path.isdir(self.carpeta_vigilada):
             self.chk_vigilar.setChecked(True)
+
+    def _datos_sesion_actual(self):
+        paginas = [
+            base64.b64encode(
+                bytes(self.lista_pdf.item(i).data(Qt.ItemDataRole.UserRole))
+            ).decode("ascii")
+            for i in range(self.lista_pdf.count())
+        ]
+        def codificar_foto(imagen):
+            if imagen is None:
+                return ""
+            ok, buffer_png = cv2.imencode(
+                ".png", imagen,
+                [cv2.IMWRITE_PNG_COMPRESSION, 3],
+            )
+            if not ok:
+                raise ValueError("No se pudo guardar la foto de trabajo")
+            return base64.b64encode(buffer_png.tobytes()).decode("ascii")
+        filtro, brillo, contraste, nitidez, intensidad = self._params()
+        return {
+            "foto_actual": self._ruta_actual,
+            "foto_actual_png": codificar_foto(self.imagen_original),
+            "geometria": {
+                "enderezada_png": codificar_foto(self.imagen_enderezada),
+                "puntos": self.lienzo_original.puntos,
+                "modo_seleccion": self.lienzo_original.modo_seleccion,
+                "modo_editar": self.lienzo_original.modo_editar,
+                "estado": self.lbl_estado_recorte.text(),
+            },
+            "foto_fallida": self._ruta_fallida_actual,
+            "errores_cola": dict(self._errores_cola),
+            "posiciones_fallidas": dict(self._posiciones_fallidas),
+            "cola": list(self.cola),
+            "cola_total": self.cola_total,
+            "cola_pos": self.cola_pos,
+            "paginas": paginas,
+            "controles": {
+                "filtro": filtro,
+                "brillo": brillo,
+                "contraste": contraste,
+                "nitidez": nitidez,
+                "intensidad": intensidad,
+            },
+            "destino": self.carpeta_salida,
+            "prefijo": self.txt_prefijo.text(),
+            "perfil": self._perfil_actual,
+        }
+
+    def _guardar_sesion_actual(self):
+        if self._restaurando_sesion or self._transicion_pagina:
+            return
+        guardar_sesion(self._datos_sesion_actual())
+
+    def _restaurar_sesion(self):
+        datos = leer_sesion()
+        if not datos:
+            return
+        self._restaurando_sesion = True
+        try:
+            ruta_actual = datos.get("foto_actual", "")
+            foto_embebida = datos.get("foto_actual_png", "")
+            if foto_embebida:
+                try:
+                    buffer_png = base64.b64decode(foto_embebida, validate=True)
+                    imagen = cv2.imdecode(
+                        np.frombuffer(buffer_png, dtype=np.uint8), cv2.IMREAD_COLOR
+                    )
+                except (ValueError, TypeError):
+                    imagen = None
+                if imagen is not None:
+                    self._cargar_cv(imagen, ruta_actual=ruta_actual,
+                                    detectar="geometria" not in datos)
+            elif ruta_actual and os.path.isfile(ruta_actual):
+                self._cargar_archivo(ruta_actual)
+            geometria = datos.get("geometria")
+            if geometria is not None and self.imagen_original is not None:
+                recorte = geometria.get("enderezada_png", "")
+                self.imagen_enderezada = cv2.imdecode(
+                    np.frombuffer(base64.b64decode(recorte, validate=True), dtype=np.uint8),
+                    cv2.IMREAD_COLOR,
+                ) if recorte else None
+                lienzo = self.lienzo_original
+                lienzo.puntos = geometria.get("puntos", [])
+                lienzo.modo_seleccion = bool(geometria.get("modo_seleccion"))
+                lienzo.modo_editar = bool(geometria.get("modo_editar"))
+                lienzo.setCursor(Qt.CursorShape.CrossCursor if lienzo.modo_seleccion
+                                 else Qt.CursorShape.ArrowCursor)
+                lienzo.actualizar_visualizacion()
+                self.lbl_estado_recorte.setText(geometria.get("estado", ""))
+                self._actualizar_preview_base()
+            self._ruta_fallida_actual = str(datos.get("foto_fallida", ""))
+            self._errores_cola = dict(datos.get("errores_cola", {}))
+            self._posiciones_fallidas = dict(datos.get("posiciones_fallidas", {}))
+            if hasattr(self, "btn_reintentar"):
+                self.btn_reintentar.setEnabled(bool(self._ruta_fallida_actual))
+
+            self.cola = list(datos.get("cola", []))
+            self.cola_total = int(datos.get("cola_total", len(self.cola)))
+            self.cola_pos = int(datos.get("cola_pos", 1 if ruta_actual else 0))
+            if self.cola_total < len(self.cola) + (1 if self._ruta_actual else 0):
+                self.cola_total = len(self.cola) + (1 if self._ruta_actual else 0)
+
+            controles = datos.get("controles", {})
+            valores = (
+                (self.combo_filtro, "filtro"),
+                (self.sld_brillo, "brillo"),
+                (self.sld_contraste, "contraste"),
+                (self.sld_nitidez, "nitidez"),
+                (self.sld_intensidad_bn, "intensidad"),
+            )
+            for control, clave in valores:
+                if clave in controles:
+                    control.blockSignals(True)
+                    control.setValue(int(controles[clave])) if hasattr(
+                        control, "setValue"
+                    ) else control.setCurrentIndex(int(controles[clave]))
+                    control.blockSignals(False)
+            self.cont_intensidad.setVisible(self.combo_filtro.currentIndex() <= 1)
+            self.carpeta_salida = str(datos.get("destino", self.carpeta_salida))
+            self.txt_prefijo.setText(str(datos.get("prefijo", self.txt_prefijo.text())))
+            nombre_perfil = str(datos.get("perfil", self._perfil_actual))
+            indice_perfil = self.combo_perfil.findText(nombre_perfil)
+            if indice_perfil >= 0:
+                bloqueadas = self.combo_perfil.blockSignals(True)
+                self.combo_perfil.setCurrentIndex(indice_perfil)
+                self.combo_perfil.blockSignals(bloqueadas)
+                self._perfil_actual = nombre_perfil
+            self._actualizar_label_carpeta()
+
+            for pagina in datos.get("paginas", []):
+                try:
+                    datos_pagina = base64.b64decode(pagina, validate=True)
+                except (ValueError, TypeError):
+                    continue
+                self._insertar_pagina_codificada(datos_pagina)
+            self._actualizar_indicador_cola()
+            self.actualizar_procesado()
+        finally:
+            self._restaurando_sesion = False
+
+    def closeEvent(self, event):
+        self._guardar_sesion_actual()
+        super().closeEvent(event)
+
+    def resizeEvent(self, event):
+        if hasattr(self, "accion_abrir_cabecera"):
+            mostrar_secundarias = event.size().width() >= 1150
+            self.accion_abrir_cabecera.setVisible(mostrar_secundarias)
+            self.accion_pegar_cabecera.setVisible(mostrar_secundarias)
+        super().resizeEvent(event)
 
     # ----------------------------------------------------------
     # Atajos de teclado
@@ -405,6 +577,7 @@ class VentanaPrincipal(QMainWindow):
     # ----------------------------------------------------------
 
     def _actualizar_barra_estado(self):
+        self._actualizar_finalizacion()
         if hasattr(self, "btn_quitar"):
             self.btn_quitar.setEnabled(self.imagen_original is not None)
         if self.imagen_original is None:
@@ -423,6 +596,29 @@ class VentanaPrincipal(QMainWindow):
             partes.append(f"PDF: {self.lista_pdf.count()} pág.")
         partes.append("Enter: Guardado rápido  |  Ctrl+S: JPG  Ctrl+Shift+S: PDF")
         self.statusBar().showMessage("   |   ".join(partes))
+
+    def _actualizar_finalizacion(self):
+        if not hasattr(self, "panel_finalizacion"):
+            return
+        hay_paginas = self.lista_pdf.count() > 0
+        self.panel_finalizacion.setVisible(hay_paginas)
+        self.btn_deshacer_ultima.setEnabled(hay_paginas)
+
+    def _mostrar_actualizacion_lista(self, version):
+        self.btn_actualizacion_lista.setText(f"Reiniciar y actualizar a {version}")
+        self.btn_actualizacion_lista.setVisible(True)
+        self.statusBar().showMessage(
+            f"Actualización {version} preparada; se instalará cuando tú decidas",
+            8000,
+        )
+
+    def instalar_actualizacion_lista(self):
+        if not self._ruta_update_lista:
+            return
+        self._estado_actualizacion = "installing"
+        self._guardar_sesion_actual()
+        actualizador.lanzar_instalador(self._ruta_update_lista)
+        QApplication.quit()
 
     # ----------------------------------------------------------
     # Drag & drop sobre la ventana principal
@@ -470,7 +666,7 @@ class VentanaPrincipal(QMainWindow):
         return g
 
     def _iniciar_cola(self, rutas):
-        rutas = list(rutas)
+        rutas = rutas_unicas_en_orden(rutas)
         if not rutas:
             return
         self.cola_total = len(rutas)
@@ -478,37 +674,55 @@ class VentanaPrincipal(QMainWindow):
         self.cola = rutas[1:]
         self._cargar_archivo(rutas[0])
         self._actualizar_indicador_cola()
+        self._guardar_sesion_actual()
 
     def _cargar_siguiente_de_cola(self):
         siguiente, resto = siguiente_de_cola(self.cola)
         self.cola = resto
         if siguiente is None:
             n = self.lista_pdf.count()
+            self.quitar_imagen()
             self.cola_total = 0
             self.cola_pos = 0
             self._actualizar_indicador_cola()
             msg = f"Has terminado la tanda.\n{n} página{'s' if n != 1 else ''} en el PDF."
             QTimer.singleShot(0, lambda: QMessageBox.information(self, "Cola terminada", msg))
+            self._guardar_sesion_actual()
             return
         self.cola_pos += 1
         self._cargar_archivo(siguiente)
         self._actualizar_indicador_cola()
+        self._guardar_sesion_actual()
 
     def terminar_y_siguiente(self):
         img = self.procesada_full()
         if img is None:
             QMessageBox.warning(self, "Atención", "Procesa una imagen primero.")
             return
-        self.anadir_pagina_pdf(img)
-        if self.cola_total:
-            self._cargar_siguiente_de_cola()
+        # La página y el cursor de la cola se publican en un solo snapshot.
+        # Hasta entonces el disco conserva íntegra la sesión anterior.
+        self._transicion_pagina = True
+        try:
+            self.anadir_pagina_pdf(img)
+            if self.cola_total:
+                self._cargar_siguiente_de_cola()
+            else:
+                self.quitar_imagen()
+        finally:
+            self._transicion_pagina = False
+        self._guardar_sesion_actual()
 
     def _saltar_actual(self):
         """Pasa a la siguiente foto de la tanda sin añadir la actual al PDF."""
+        self._ruta_fallida_actual = ""
+        if hasattr(self, "btn_reintentar"):
+            self.btn_reintentar.setEnabled(False)
         if self.cola_total:
             self._cargar_siguiente_de_cola()
         else:
             self.statusBar().showMessage("No hay más fotos en la cola", 3000)
+        self._actualizar_indicador_cola()
+        self._guardar_sesion_actual()
 
     def _vaciar_cola(self):
         """Descarta las fotos que quedan en cola (no toca la foto actual ni el PDF)."""
@@ -519,13 +733,28 @@ class VentanaPrincipal(QMainWindow):
         self.cola_pos = self.cola_total
         self._actualizar_indicador_cola()
         self.statusBar().showMessage("Cola vaciada", 3000)
+        self._guardar_sesion_actual()
 
     def _actualizar_indicador_cola(self):
         # El grupo se ve mientras haya una tanda activa (aunque en la última
         # foto ya no queden pendientes), para no perder el "Foto X de Y".
         self.lbl_cola.setText(texto_cola(self.cola_pos, self.cola_total))
-        self.grupo_cola.setVisible(self.cola_total > 1)
+        self.grupo_cola.setVisible(self.cola_total > 1 or bool(self._errores_cola))
+        seleccion = self._ruta_fallida_actual or self.combo_fallidas.currentData()
+        self.combo_fallidas.clear()
+        for ruta, error in self._errores_cola.items():
+            posicion = self._posiciones_fallidas.get(ruta, '?')
+            self.combo_fallidas.addItem(f"Foto {posicion}: {os.path.basename(ruta)}", ruta)
+            self.combo_fallidas.setItemData(self.combo_fallidas.count() - 1,
+                                           f"{ruta}\n{error}", Qt.ItemDataRole.ToolTipRole)
+        indice = self.combo_fallidas.findData(seleccion)
+        if indice >= 0:
+            self.combo_fallidas.setCurrentIndex(indice)
+        self.combo_fallidas.setVisible(bool(self._errores_cola))
+        self.btn_reintentar.setEnabled(bool(self._errores_cola))
         self._refrescar_miniaturas_cola()
+        if self.cola:
+            QTimer.singleShot(0, self._iniciar_precalculo_siguiente)
 
     def _refrescar_miniaturas_cola(self):
         """Repuebla la tira de miniaturas con las fotos que quedan en cola.
@@ -571,10 +800,46 @@ class VentanaPrincipal(QMainWindow):
             self.lista_cola.item(i).data(Qt.ItemDataRole.UserRole)
             for i in range(self.lista_cola.count())
         ]
+        self._guardar_sesion_actual()
+
+    def _iniciar_precalculo_siguiente(self):
+        if not self.cola:
+            return
+        ruta = self.cola[0]
+        if ruta in self._precalculos:
+            return
+        trabajador = self._trabajador_precalculo
+        if trabajador is not None and trabajador.isRunning():
+            return
+        trabajador = TrabajadorPrecalculo(ruta, self)
+        trabajador.listo.connect(self._al_terminar_precalculo)
+        trabajador.finished.connect(self._al_finalizar_hilo_precalculo)
+        self._trabajador_precalculo = trabajador
+        trabajador.start()
+
+    def _al_terminar_precalculo(self, resultado: PrecalculoResultado):
+        self._precalculos[resultado.ruta] = resultado
+
+    def _propuesta_actual(self):
+        propuesta = self._precalculos.get(self._ruta_actual)
+        if (propuesta is not None and self.imagen_original is not None
+                and propuesta.firma_imagen == firma_imagen(self.imagen_original)):
+            return propuesta
+        return None
+
+    def _al_finalizar_hilo_precalculo(self):
+        trabajador = self._trabajador_precalculo
+        if trabajador is not None:
+            trabajador.deleteLater()
+        self._trabajador_precalculo = None
 
     def _encolar(self, rutas):
         """Añade fotos al final de la cola sin pisar la imagen en curso."""
-        rutas = list(rutas)
+        rutas = rutas_unicas_en_orden(rutas)
+        ya_encoladas = set(self.cola)
+        if self._ruta_actual:
+            ya_encoladas.add(self._ruta_actual)
+        rutas = [ruta for ruta in rutas if ruta not in ya_encoladas]
         if not rutas:
             return
         if self.imagen_original is None and not self.cola:
@@ -591,6 +856,7 @@ class VentanaPrincipal(QMainWindow):
         self.statusBar().showMessage(
             f"📲 {n} foto{'s' if n != 1 else ''} nueva{'s' if n != 1 else ''} "
             "en la cola", 5000)
+        self._guardar_sesion_actual()
 
     # ----------------------------------------------------------
     # Carpeta vigilada (WhatsApp): encola las fotos que aparezcan
@@ -626,6 +892,15 @@ class VentanaPrincipal(QMainWindow):
                 return
         # Solo cuentan las fotos que lleguen a partir de ahora
         self._vistos = set(self._listar_imagenes(self.carpeta_vigilada))
+        self._observados = {}
+        self._identidades_vistas = set()
+        for nombre in self._vistos:
+            try:
+                self._identidades_vistas.add(identidad_archivo(
+                    os.path.join(self.carpeta_vigilada, nombre)
+                ))
+            except OSError:
+                pass
         self._watcher.addPath(self.carpeta_vigilada)
         self.statusBar().showMessage(
             f"📲 Vigilando {self.carpeta_vigilada}", 5000)
@@ -645,10 +920,31 @@ class VentanaPrincipal(QMainWindow):
             return
         actuales = set(self._listar_imagenes(self.carpeta_vigilada))
         nuevas = sorted(actuales - self._vistos)
-        self._vistos = actuales
-        if nuevas:
-            self._encolar(
-                [os.path.join(self.carpeta_vigilada, n) for n in nuevas])
+        listas = []
+        pendientes = False
+        for nombre in nuevas:
+            ruta = os.path.join(self.carpeta_vigilada, nombre)
+            try:
+                stat = os.stat(ruta)
+                observado = self._observados.setdefault(ruta, ArchivoObservado())
+                if not observado.actualizar(stat.st_size, stat.st_mtime_ns):
+                    pendientes = True
+                    continue
+                identidad = identidad_archivo(ruta)
+            except OSError:
+                pendientes = True
+                continue
+            self._vistos.add(nombre)
+            self._observados.pop(ruta, None)
+            if identidad in self._identidades_vistas:
+                continue
+            self._identidades_vistas.add(identidad)
+            listas.append(ruta)
+        self._vistos.intersection_update(actuales)
+        if listas:
+            self._encolar(listas)
+        if pendientes:
+            self._timer_vigia.start()
 
     def _crear_interfaz(self):
         central = QWidget()
@@ -677,16 +973,29 @@ class VentanaPrincipal(QMainWindow):
         marca.addWidget(subtitulo)
         lc.addLayout(marca)
         lc.addStretch()
-        btn_pegar = QPushButton("Pegar  Ctrl+V")
-        btn_pegar.setObjectName("cabeceraAccion")
-        btn_pegar.setToolTip("Pegar la imagen que tengas en el portapapeles")
-        btn_pegar.clicked.connect(self.pegar_imagen)
-        lc.addWidget(btn_pegar)
-        btn_abrir_cab = QPushButton("Abrir fotos…")
-        btn_abrir_cab.setObjectName("cabeceraAccion")
-        btn_abrir_cab.setToolTip("También puedes arrastrar varias fotos sobre la ventana")
-        btn_abrir_cab.clicked.connect(self.abrir_imagen)
-        lc.addWidget(btn_abrir_cab)
+        self.accion_pegar_cabecera = QPushButton("Pegar  Ctrl+V")
+        self.accion_pegar_cabecera.setObjectName("accionPegar")
+        self.accion_pegar_cabecera.setProperty("role", "cabeceraAccion")
+        self.accion_pegar_cabecera.setToolTip(
+            "Pegar la imagen que tengas en el portapapeles"
+        )
+        self.accion_pegar_cabecera.clicked.connect(self.pegar_imagen)
+        lc.addWidget(self.accion_pegar_cabecera)
+        self.accion_abrir_cabecera = QPushButton("Abrir fotos…")
+        self.accion_abrir_cabecera.setObjectName("accionAbrir")
+        self.accion_abrir_cabecera.setProperty("role", "cabeceraAccion")
+        self.accion_abrir_cabecera.setToolTip(
+            "También puedes arrastrar varias fotos sobre la ventana"
+        )
+        self.accion_abrir_cabecera.clicked.connect(self.abrir_imagen)
+        lc.addWidget(self.accion_abrir_cabecera)
+        self.btn_actualizacion_lista = QPushButton("Reiniciar y actualizar")
+        self.btn_actualizacion_lista.setObjectName("actualizacionLista")
+        self.btn_actualizacion_lista.clicked.connect(
+            self.instalar_actualizacion_lista
+        )
+        self.btn_actualizacion_lista.setVisible(False)
+        lc.addWidget(self.btn_actualizacion_lista)
         raiz.addWidget(cabecera)
 
         contenido = QWidget()
@@ -706,23 +1015,26 @@ class VentanaPrincipal(QMainWindow):
         self.lienzo_original.imagenes_soltadas.connect(self._iniciar_cola)
         col_izq.addWidget(self.lienzo_original)
         w_izq = QWidget()
+        w_izq.setObjectName("zonaOriginal")
         w_izq.setLayout(col_izq)
 
         # Columna central: controles (con scroll para que no se solapen en pantalla completa)
         w_ctrl = self._construir_panel_controles()
-        scroll_ctrl = QScrollArea()
-        scroll_ctrl.setWidgetResizable(True)
-        scroll_ctrl.setWidget(w_ctrl)
-        scroll_ctrl.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll_ctrl.setMinimumWidth(360)
-        scroll_ctrl.setMaximumWidth(410)
-        scroll_ctrl.setFrameShape(QScrollArea.Shape.NoFrame)
+        self.scroll_controles = QScrollArea()
+        self.scroll_controles.setWidgetResizable(True)
+        self.scroll_controles.setWidget(w_ctrl)
+        self.scroll_controles.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.scroll_controles.setMinimumWidth(360)
+        self.scroll_controles.setMaximumWidth(410)
+        self.scroll_controles.setFrameShape(QScrollArea.Shape.NoFrame)
         centro = QWidget()
+        centro.setObjectName("panelControles")
         centro_layout = QVBoxLayout(centro)
         centro_layout.setContentsMargins(0, 0, 0, 0)
         centro_layout.setSpacing(8)
-        centro_layout.addWidget(scroll_ctrl, 1)
-        centro_layout.addWidget(self.btn_enviar_aplifisa)
+        centro_layout.addWidget(self.scroll_controles, 1)
         centro.setMinimumWidth(360)
         centro.setMaximumWidth(410)
 
@@ -734,6 +1046,7 @@ class VentanaPrincipal(QMainWindow):
         self.lienzo_resultado = LienzoImagen()
         col_der.addWidget(self.lienzo_resultado)
         w_der = QWidget()
+        w_der.setObjectName("zonaResultado")
         w_der.setLayout(col_der)
 
         layout.addWidget(w_izq, 4)
@@ -751,6 +1064,27 @@ class VentanaPrincipal(QMainWindow):
         ayuda.setWordWrap(True)
         panel.addWidget(titulo)
         panel.addWidget(ayuda)
+
+        contexto = QGroupBox("Perfil y cliente")
+        contexto_layout = QVBoxLayout(contexto)
+        fila_perfil = QHBoxLayout()
+        fila_perfil.addWidget(QLabel("Perfil:"))
+        self.combo_perfil = QComboBox()
+        self.combo_perfil.addItems(self._perfiles)
+        fila_perfil.addWidget(self.combo_perfil, 1)
+        self.btn_guardar_perfil = QPushButton("Guardar ajustes")
+        fila_perfil.addWidget(self.btn_guardar_perfil)
+        contexto_layout.addLayout(fila_perfil)
+        fila_cliente = QHBoxLayout()
+        fila_cliente.addWidget(QLabel("Cliente:"))
+        self.combo_cliente = QComboBox()
+        self.combo_cliente.addItem("Sin cliente", None)
+        for nif, cliente in leer_clientes().items():
+            nombre = cliente.get("nombre") or nif
+            self.combo_cliente.addItem(f"{nombre} · {nif}", cliente)
+        fila_cliente.addWidget(self.combo_cliente, 1)
+        contexto_layout.addLayout(fila_cliente)
+        panel.addWidget(contexto)
 
         # === Entrada rápida ===
         g1 = QGroupBox("Entrada rápida")
@@ -789,13 +1123,21 @@ class VentanaPrincipal(QMainWindow):
             "Fotos que faltan por procesar. Arrastra para reordenarlas.")
         self.lista_cola.model().rowsMoved.connect(self._sincronizar_cola_desde_lista)
         lc.addWidget(self.lista_cola)
+        self.combo_fallidas = QComboBox()
+        self.combo_fallidas.setToolTip("Fotos con error: elige una para reintentarla")
+        self.combo_fallidas.setVisible(False)
+        lc.addWidget(self.combo_fallidas)
         fila_cola = QHBoxLayout()
-        btn_saltar = QPushButton("⏭  Saltar esta")
+        btn_saltar = QPushButton("Saltar esta")
         btn_saltar.setToolTip("Pasa a la siguiente foto sin añadir esta al PDF.")
         btn_saltar.clicked.connect(self._saltar_actual)
         btn_vaciar_cola = QPushButton("Vaciar cola")
         btn_vaciar_cola.clicked.connect(self._vaciar_cola)
+        self.btn_reintentar = QPushButton("Reintentar foto")
+        self.btn_reintentar.setEnabled(False)
+        self.btn_reintentar.clicked.connect(self.reintentar_actual)
         fila_cola.addWidget(btn_saltar)
+        fila_cola.addWidget(self.btn_reintentar)
         fila_cola.addWidget(btn_vaciar_cola)
         lc.addLayout(fila_cola)
         self.grupo_cola.setVisible(False)
@@ -808,7 +1150,7 @@ class VentanaPrincipal(QMainWindow):
         btn_auto.setMinimumHeight(38)
         btn_auto.clicked.connect(self.detectar_auto)
         l2.addWidget(btn_auto)
-        btn_multi = QPushButton("📑  Detectar varios tickets en la foto")
+        btn_multi = QPushButton("Detectar varios tickets en la foto")
         btn_multi.setToolTip("Si hay varios tickets sobre la mesa, los recorta por separado y los encola")
         btn_multi.clicked.connect(self.detectar_multiples_tickets)
         l2.addWidget(btn_multi)
@@ -820,7 +1162,7 @@ class VentanaPrincipal(QMainWindow):
         btn_sin_recortar.clicked.connect(self.usar_sin_recortar)
         l2.addWidget(btn_sin_recortar)
         fila_rot = QHBoxLayout()
-        btn_auto_rot = QPushButton("🪄 Auto")
+        btn_auto_rot = QPushButton("Auto")
         btn_auto_rot.setToolTip("Detecta la orientación del texto y gira el documento automáticamente (Ctrl+Shift+R)")
         btn_auto_rot.clicked.connect(self.auto_orientar)
         btn_rot_izq = QPushButton("⟲ 90°")
@@ -898,7 +1240,7 @@ class VentanaPrincipal(QMainWindow):
         l5.addLayout(fila_pref)
 
         # Guardado rápido: destino fijo + nombre por fecha-hora, sin diálogos
-        btn_rapido = QPushButton("⚡  Guardado rápido  (Enter)")
+        btn_rapido = QPushButton("Guardado rápido  (Enter)")
         btn_rapido.setObjectName("btnExito")
         btn_rapido.setMinimumHeight(44)
         btn_rapido.clicked.connect(self.guardado_rapido)
@@ -939,9 +1281,12 @@ class VentanaPrincipal(QMainWindow):
             QListWidget.SelectionMode.ExtendedSelection)
         self.lista_pdf.setMinimumHeight(130)
         self.lista_pdf.setToolTip("Arrastra las miniaturas para ordenar las páginas")
+        self.lista_pdf.model().rowsMoved.connect(
+            lambda *_args: self._guardar_sesion_actual()
+        )
         l6.addWidget(self.lista_pdf)
         fila_pdf = QHBoxLayout()
-        btn_add_pdf = QPushButton("➕ Añadir")
+        btn_add_pdf = QPushButton("Añadir")
         btn_add_pdf.clicked.connect(lambda: self.anadir_pagina_pdf())
         btn_quitar_pdf = QPushButton("Quitar")
         btn_quitar_pdf.clicked.connect(self.quitar_pagina_pdf)
@@ -951,22 +1296,32 @@ class VentanaPrincipal(QMainWindow):
         fila_pdf.addWidget(btn_quitar_pdf)
         fila_pdf.addWidget(btn_vaciar_pdf)
         l6.addLayout(fila_pdf)
-        btn_dni = QPushButton("🪪  Unir 2 en 1 hoja (DNI)")
+        btn_dni = QPushButton("Unir 2 en 1 hoja (DNI)")
         btn_dni.setToolTip(
             "Combina las dos páginas seleccionadas (o las dos últimas) en una "
             "sola hoja A4: cara delantera arriba y trasera abajo.")
         btn_dni.clicked.connect(self.combinar_dni)
         l6.addWidget(btn_dni)
-        btn_exp_pdf = QPushButton("Exportar el PDF…")
-        btn_exp_pdf.setMinimumHeight(36)
-        btn_exp_pdf.clicked.connect(self.exportar_pdf_multipagina)
-        l6.addWidget(btn_exp_pdf)
+        self.panel_finalizacion = QFrame()
+        self.panel_finalizacion.setObjectName("panelFinalizacion")
+        acciones_finales = QVBoxLayout(self.panel_finalizacion)
+        acciones_finales.setContentsMargins(0, 8, 0, 0)
+        self.btn_exportar_lote = QPushButton("Exportar PDF…")
+        self.btn_exportar_lote.setMinimumHeight(36)
+        self.btn_exportar_lote.clicked.connect(self.exportar_pdf_multipagina)
+        acciones_finales.addWidget(self.btn_exportar_lote)
         self.btn_enviar_aplifisa = QPushButton("Enviar a Facturas a Aplifisa")
         self.btn_enviar_aplifisa.setObjectName("btnEnviar")
         self.btn_enviar_aplifisa.setMinimumHeight(46)
         self.btn_enviar_aplifisa.setToolTip(
             "Guarda el PDF y abre Facturas a Aplifisa con el lote ya cargado.")
         self.btn_enviar_aplifisa.clicked.connect(self.enviar_a_aplifisa)
+        acciones_finales.addWidget(self.btn_enviar_aplifisa)
+        self.btn_deshacer_ultima = QPushButton("Deshacer última página")
+        self.btn_deshacer_ultima.clicked.connect(self.deshacer_ultima_pagina)
+        acciones_finales.addWidget(self.btn_deshacer_ultima)
+        self.panel_finalizacion.setVisible(False)
+        l6.addWidget(self.panel_finalizacion)
         panel.addWidget(g6)
 
         panel.addWidget(self._grupo_plegable(
@@ -989,7 +1344,20 @@ class VentanaPrincipal(QMainWindow):
         btn_vigilada.clicked.connect(self.elegir_carpeta_vigilada)
         fila_vig.addWidget(btn_vigilada)
         l_mas.addLayout(fila_vig)
-        panel.addWidget(self._grupo_plegable("Más opciones", cont_mas, abierto=False))
+        self.btn_comprobar_actualizaciones = QPushButton(
+            "Comprobar actualizaciones"
+        )
+        self.btn_comprobar_actualizaciones.clicked.connect(
+            lambda: actualizador.conectar(self, __version__, manual=True)
+        )
+        l_mas.addWidget(self.btn_comprobar_actualizaciones)
+        grupo_mas = self._grupo_plegable("Más opciones", cont_mas, abierto=False)
+        grupo_mas.setObjectName("masOpciones")
+        panel.addWidget(grupo_mas)
+
+        self.combo_perfil.currentTextChanged.connect(self._aplicar_perfil)
+        self.btn_guardar_perfil.clicked.connect(self._guardar_perfil_actual)
+        self.combo_cliente.currentIndexChanged.connect(self._al_seleccionar_cliente)
 
         panel.addStretch()
 
@@ -1032,36 +1400,69 @@ class VentanaPrincipal(QMainWindow):
             img = leer_imagen(ruta)
             if img is None:
                 raise ValueError("No se pudo leer el archivo.")
-            self._cargar_cv(img, os.path.dirname(ruta))
+            self._cargar_cv(img, os.path.dirname(ruta), ruta)
+            self._ruta_fallida_actual = ""
+            self._errores_cola.pop(ruta, None)
+            self._posiciones_fallidas.pop(ruta, None)
+            self._actualizar_indicador_cola()
+            self._guardar_sesion_actual()
+            return True
         except Exception as e:
+            self._ruta_fallida_actual = ruta
+            self._errores_cola[ruta] = str(e)
+            self._posiciones_fallidas.setdefault(ruta, self.cola_pos)
+            self.imagen_original = None
+            self.imagen_enderezada = None
+            self._preview_base = None
+            self._ruta_actual = ""
+            self.lienzo_original.limpiar_puntos()
+            self.lienzo_original.mostrar_imagen(None)
+            self.lienzo_resultado.mostrar_imagen(None)
+            self.btn_reintentar.setEnabled(True)
             if self.cola:
-                # En mitad de una tanda no se interrumpe: avisa y salta a la
-                # siguiente (si no, la foto anterior quedaría cargada y se
-                # podría añadir al PDF por duplicado).
+                # El resto del lote permanece en su orden; esta foto se puede
+                # reintentar o saltar sin afectar páginas confirmadas.
+                self.imagen_original = None
+                self.imagen_enderezada = None
                 self.statusBar().showMessage(
                     f"⚠️ {os.path.basename(ruta)} no se pudo abrir ({e}); "
-                    "pasando a la siguiente", 8000)
-                QTimer.singleShot(0, self._cargar_siguiente_de_cola)
+                    "corrige el archivo y pulsa Reintentar, o sáltalo", 8000)
             else:
-                if self.cola_total:
-                    self.cola_total = 0
-                    self.cola_pos = 0
-                    self._actualizar_indicador_cola()
                 QMessageBox.critical(
                     self, "Error", f"No se pudo abrir la imagen:\n{e}")
+            self._actualizar_indicador_cola()
+            self._guardar_sesion_actual()
+            return False
 
-    def _cargar_cv(self, img, ruta_origen=""):
+    def reintentar_actual(self):
+        ruta = self.combo_fallidas.currentData() or self._ruta_fallida_actual
+        if not ruta:
+            return
+        if self.imagen_original is not None:
+            self._encolar([ruta])
+            self.statusBar().showMessage("La foto seleccionada se reintentará en la cola", 4000)
+            return
+        if self._cargar_archivo(ruta):
+            self.statusBar().showMessage(
+                f"Foto recuperada: {os.path.basename(ruta)}", 4000
+            )
+            self._guardar_sesion_actual()
+
+    def _cargar_cv(self, img, ruta_origen="", ruta_actual="", detectar=True):
         self.imagen_original = img
         self.imagen_enderezada = None
         self._ruta_origen = ruta_origen or self._ruta_origen
+        self._ruta_actual = ruta_actual
         self.lienzo_original.limpiar_puntos()
         self.lienzo_original.mostrar_imagen(img)
         self._estado_recorte("Sin recortar")
         self._resetear_sliders()
         self._actualizar_preview_base()
-        self.detectar_auto(silencioso=True)
+        if detectar:
+            self.detectar_auto(silencioso=True)
         self.actualizar_procesado()
         self._actualizar_barra_estado()
+        self._guardar_sesion_actual()
 
     def _qimage_a_cv(self, qimg):
         """Convierte un QImage (p. ej. del portapapeles) a array OpenCV BGR.
@@ -1109,6 +1510,7 @@ class VentanaPrincipal(QMainWindow):
         self.imagen_original = None
         self.imagen_enderezada = None
         self._preview_base = None
+        self._ruta_actual = ""
         self.lienzo_original.cancelar_seleccion()
         self.lienzo_original.limpiar_puntos()
         self.lienzo_original.mostrar_imagen(None)
@@ -1122,6 +1524,7 @@ class VentanaPrincipal(QMainWindow):
         self._actualizar_indicador_cola()
         self._actualizar_barra_estado()
         self.statusBar().showMessage("Foto quitada — pega (Ctrl+V) o abre otra", 4000)
+        self._guardar_sesion_actual()
 
     def rotar_original(self, grados):
         if self.imagen_original is None:
@@ -1134,13 +1537,18 @@ class VentanaPrincipal(QMainWindow):
         self._actualizar_preview_base()
         self.actualizar_procesado()
         self._actualizar_barra_estado()
+        self._guardar_sesion_actual()
 
     def auto_orientar(self):
         if self.imagen_original is None:
             self.statusBar().showMessage("Primero abre una imagen para auto-orientar", 3000)
             return
         base = self.imagen_enderezada if self.imagen_enderezada is not None else self.imagen_original
-        _, grados = auto_orientar_documento(base)
+        propuesta = self._propuesta_actual()
+        if propuesta is not None and self.imagen_enderezada is None:
+            grados = propuesta.rotacion
+        else:
+            _, grados = auto_orientar_documento(base)
         if grados != 0:
             if self.imagen_enderezada is not None:
                 self.imagen_enderezada = rotar_imagen(self.imagen_enderezada, grados)
@@ -1151,6 +1559,7 @@ class VentanaPrincipal(QMainWindow):
             self.statusBar().showMessage(f"🪄 Documento auto-orientado ({grados}°)", 4000)
         else:
             self.statusBar().showMessage("El documento ya tiene la orientación correcta", 3000)
+        self._guardar_sesion_actual()
 
     def detectar_multiples_tickets(self):
         if self.imagen_original is None:
@@ -1192,7 +1601,10 @@ class VentanaPrincipal(QMainWindow):
             if not silencioso:
                 QMessageBox.warning(self, "Atención", "Primero abre una imagen.")
             return
-        puntos = detectar_documento(self.imagen_original)
+        propuesta = self._propuesta_actual()
+        puntos = propuesta.puntos if propuesta is not None else detectar_documento(
+            self.imagen_original
+        )
         if puntos is None:
             if not silencioso:
                 QMessageBox.information(
@@ -1208,6 +1620,7 @@ class VentanaPrincipal(QMainWindow):
         self._estado_recorte("Recorte automático", ok=True)
         self._actualizar_preview_base()
         self.actualizar_procesado()
+        self._guardar_sesion_actual()
 
     def iniciar_manual(self):
         if self.imagen_original is None:
@@ -1224,6 +1637,7 @@ class VentanaPrincipal(QMainWindow):
         self._estado_recorte("Recorte manual", ok=True)
         self._actualizar_preview_base()
         self.actualizar_procesado()
+        self._guardar_sesion_actual()
 
     def usar_sin_recortar(self):
         if self.imagen_original is None:
@@ -1233,6 +1647,7 @@ class VentanaPrincipal(QMainWindow):
         self._estado_recorte("Sin recortar")
         self._actualizar_preview_base()
         self.actualizar_procesado()
+        self._guardar_sesion_actual()
 
     # --- Procesado: vista previa (rápida) vs. resolución completa ---
 
@@ -1303,6 +1718,56 @@ class VentanaPrincipal(QMainWindow):
         # La intensidad solo aplica a los dos modos B/N
         self.cont_intensidad.setVisible(idx <= 1)
         self.actualizar_procesado()
+
+    def _aplicar_perfil(self, nombre):
+        perfil = self._perfiles.get(nombre)
+        if perfil is None:
+            return
+        self._perfil_actual = nombre
+        controles = (
+            (self.combo_filtro, perfil.filtro),
+            (self.sld_intensidad_bn, perfil.intensidad),
+            (self.sld_brillo, perfil.brillo),
+            (self.sld_contraste, perfil.contraste),
+            (self.sld_nitidez, perfil.nitidez),
+        )
+        for control, valor in controles:
+            control.blockSignals(True)
+            if isinstance(control, QComboBox):
+                control.setCurrentIndex(valor)
+            else:
+                control.setValue(valor)
+            control.blockSignals(False)
+        self.cont_intensidad.setVisible(perfil.filtro <= 1)
+        if perfil.destino:
+            self.carpeta_salida = perfil.destino
+            self._actualizar_label_carpeta()
+        self.actualizar_procesado()
+        self._guardar_sesion_actual()
+
+    def _guardar_perfil_actual(self):
+        nombre = self.combo_perfil.currentText() or "Factura"
+        filtro, brillo, contraste, nitidez, intensidad = self._params()
+        perfil = PerfilEscaneo(
+            nombre, filtro, intensidad, brillo, contraste, nitidez,
+            self.carpeta_salida,
+        )
+        guardar_perfil(perfil)
+        self._perfiles[nombre] = perfil
+        self.statusBar().showMessage(f"Perfil {nombre} guardado", 3000)
+
+    def _al_seleccionar_cliente(self, indice):
+        cliente = self.combo_cliente.itemData(indice)
+        if not cliente:
+            return
+        sugerencia = cliente.get("nombre") or cliente.get("nif", "")
+        if sugerencia:
+            self.txt_prefijo.setText(str(sugerencia))
+        carpeta = cliente.get("carpeta") or cliente.get("destino")
+        if carpeta:
+            self.carpeta_salida = str(carpeta)
+            self._actualizar_label_carpeta()
+        self._guardar_sesion_actual()
 
     # ----------------------------------------------------------
     # Guardado rápido (carpeta fija + nombre por fecha-hora)
@@ -1434,10 +1899,18 @@ class VentanaPrincipal(QMainWindow):
             return
         self._insertar_pagina(img)
         self._actualizar_barra_estado()
+        self._guardar_sesion_actual()
 
     def _insertar_pagina(self, img, fila=None):
         """Crea el item de página: miniatura + imagen comprimida en memoria
         (no la imagen entera, que con fotos de móvil son ~35 MB por página)."""
+        self._insertar_pagina_codificada(codificar_pagina(img), fila)
+
+    def _insertar_pagina_codificada(self, datos, fila=None):
+        """Restaura una página conservando exactamente sus bytes comprimidos."""
+        img = decodificar_pagina(datos)
+        if img is None:
+            return
         rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         h, w = rgb.shape[:2]
         qimg = QImage(rgb.data, w, h, 3 * w, QImage.Format.Format_RGB888).copy()
@@ -1445,12 +1918,20 @@ class VentanaPrincipal(QMainWindow):
             80, 104, Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation))
         item = QListWidgetItem(icono, "")
-        item.setData(Qt.ItemDataRole.UserRole, codificar_pagina(img))
+        item.setData(Qt.ItemDataRole.UserRole, bytes(datos))
         if fila is None:
             self.lista_pdf.addItem(item)
         else:
             self.lista_pdf.insertItem(fila, item)
         self.lista_pdf.setCurrentItem(item)
+
+    def deshacer_ultima_pagina(self):
+        if not self.lista_pdf.count():
+            return
+        self.lista_pdf.takeItem(self.lista_pdf.count() - 1)
+        self._actualizar_barra_estado()
+        self._guardar_sesion_actual()
+        self.statusBar().showMessage("Última página retirada del lote", 3000)
 
     def quitar_pagina_pdf(self):
         filas = sorted((self.lista_pdf.row(it)
@@ -1460,6 +1941,7 @@ class VentanaPrincipal(QMainWindow):
         for fila in filas:
             self.lista_pdf.takeItem(fila)
         self._actualizar_barra_estado()
+        self._guardar_sesion_actual()
 
     def combinar_dni(self):
         """Une dos páginas (las 2 seleccionadas, o las 2 últimas) en una sola
@@ -1487,10 +1969,12 @@ class VentanaPrincipal(QMainWindow):
         self._actualizar_barra_estado()
         self.statusBar().showMessage(
             "🪪 Dos páginas unidas en una hoja A4", 5000)
+        self._guardar_sesion_actual()
 
     def vaciar_paginas_pdf(self):
         self.lista_pdf.clear()
         self._actualizar_barra_estado()
+        self._guardar_sesion_actual()
 
     def _elegir_ruta_pdf_lote(self):
         nombre_def = (self._prefijo_limpio() or "facturas") + ".pdf"

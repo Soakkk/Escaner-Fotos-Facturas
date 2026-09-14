@@ -6,12 +6,15 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import numpy as np
 import cv2
+import pytest
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt
 
 _app = QApplication.instance() or QApplication([])
 
 import escaner_fotos as ef
+from suite_storage import fusionar_cliente
+from precalculo import calcular_precalculo
 
 
 def _foto_documento():
@@ -189,3 +192,368 @@ def test_auto_orientar_en_ventana():
     assert base.shape[0] == 1200
     assert base.shape[1] == 800
 
+
+def test_sesion_restaura_foto_cola_orden_y_paginas(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "estado"))
+    rutas = _crear_fotos(tmp_path, 3)
+    primera = ef.VentanaPrincipal()
+    primera._iniciar_cola(rutas)
+    primera.anadir_pagina_pdf(primera.procesada_full())
+    primera._guardar_sesion_actual()
+
+    restaurada = ef.VentanaPrincipal()
+
+    assert restaurada._ruta_actual == rutas[0]
+    assert restaurada.cola == rutas[1:]
+    assert restaurada.cola_pos == 1
+    assert restaurada.cola_total == 3
+    assert restaurada.lista_pdf.count() == 1
+    assert (
+        restaurada.lista_pdf.item(0).data(Qt.ItemDataRole.UserRole)
+        == primera.lista_pdf.item(0).data(Qt.ItemDataRole.UserRole)
+    )
+
+
+def test_sesion_restaura_sin_perdida_una_foto_pegada(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "estado"))
+    foto = _foto_documento()
+    primera = ef.VentanaPrincipal()
+    primera._cargar_cv(foto)
+    primera._guardar_sesion_actual()
+
+    restaurada = ef.VentanaPrincipal()
+
+    assert np.array_equal(restaurada.imagen_original, foto)
+
+
+def test_reordenar_cola_persiste_el_orden(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "estado"))
+    rutas = _crear_fotos(tmp_path, 4)
+    ventana = ef.VentanaPrincipal()
+    ventana._iniciar_cola(rutas)
+    items = [ventana.lista_cola.takeItem(0) for _ in range(ventana.lista_cola.count())]
+    for item in reversed(items):
+        ventana.lista_cola.addItem(item)
+
+    ventana._sincronizar_cola_desde_lista()
+    restaurada = ef.VentanaPrincipal()
+
+    assert restaurada.cola == [rutas[3], rutas[2], rutas[1]]
+
+
+def test_foto_fallida_conserva_posicion_y_permite_reintentar(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "estado"))
+    rota = tmp_path / "rota.png"
+    rota.write_bytes(b"copia incompleta")
+    siguiente = _crear_fotos(tmp_path, 1)[0]
+    ventana = ef.VentanaPrincipal()
+
+    ventana._iniciar_cola([str(rota), siguiente])
+
+    assert ventana._ruta_fallida_actual == str(rota)
+    assert ventana.cola == [siguiente]
+    assert ventana.cola_pos == 1
+    assert ventana.btn_reintentar.isEnabled()
+
+    assert cv2.imwrite(str(rota), _foto_documento())
+    ventana.reintentar_actual()
+
+    assert ventana._ruta_fallida_actual == ""
+    assert ventana._ruta_actual == str(rota)
+    assert ventana.imagen_original is not None
+
+
+def test_vigilancia_encola_solo_despues_de_dos_firmas_estables(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "estado"))
+    ventana = ef.VentanaPrincipal()
+    ventana.carpeta_vigilada = str(tmp_path)
+    ventana.chk_vigilar.setChecked(True)
+    nueva = tmp_path / "nueva.png"
+    assert cv2.imwrite(str(nueva), _foto_documento())
+
+    ventana._procesar_carpeta_vigilada()
+    assert ventana.imagen_original is None
+    ventana._procesar_carpeta_vigilada()
+
+    assert ventana._ruta_actual == str(nueva)
+
+
+def test_seleccionar_cliente_sugiere_prefijo_y_carpeta(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "estado"))
+    destino = str(tmp_path / "Cliente Ana")
+    fusionar_cliente(
+        {"nif": "12345678Z", "nombre": "Ana López", "carpeta": destino},
+        "directorio_compartido",
+    )
+    ventana = ef.VentanaPrincipal()
+
+    ventana.combo_cliente.setCurrentIndex(1)
+
+    assert ventana.txt_prefijo.text() == "Ana López"
+    assert ventana.carpeta_salida == destino
+
+
+def test_perfil_dni_aplica_color_sin_procesar_la_imagen():
+    ventana = ef.VentanaPrincipal()
+
+    ventana._aplicar_perfil("DNI")
+
+    assert ventana.combo_filtro.currentIndex() == 2
+    assert ventana.sld_intensidad_bn.value() == 50
+    assert ventana.imagen_original is None
+
+
+def test_finalizacion_permite_deshacer_la_ultima_pagina():
+    ventana = ef.VentanaPrincipal()
+    ventana._cargar_cv(_foto_documento())
+    ventana.anadir_pagina_pdf(ventana.procesada_full())
+
+    assert not ventana.panel_finalizacion.isHidden()
+    assert ventana.btn_deshacer_ultima.isEnabled()
+    ventana.deshacer_ultima_pagina()
+
+    assert ventana.lista_pdf.count() == 0
+    assert ventana.panel_finalizacion.isHidden()
+
+
+def test_instalar_actualizacion_guarda_sesion_antes_de_lanzar(monkeypatch):
+    ventana = ef.VentanaPrincipal()
+    eventos = []
+    ventana._ruta_update_lista = "/tmp/EscanerFotos-Setup.exe"
+    monkeypatch.setattr(ventana, "_guardar_sesion_actual", lambda: eventos.append("sesion"))
+    monkeypatch.setattr(
+        ef.actualizador,
+        "lanzar_instalador",
+        lambda ruta: eventos.append(("instalador", ruta)),
+    )
+    monkeypatch.setattr(ef.QApplication, "quit", lambda: eventos.append("quit"))
+
+    ventana.instalar_actualizacion_lista()
+
+    assert eventos == [
+        "sesion",
+        ("instalador", "/tmp/EscanerFotos-Setup.exe"),
+        "quit",
+    ]
+
+
+def test_shell_tiene_zonas_y_acciones_principales_identificables():
+    ventana = ef.VentanaPrincipal()
+
+    for nombre in (
+        "cabecera",
+        "zonaOriginal",
+        "panelControles",
+        "zonaResultado",
+        "accionAbrir",
+        "accionPegar",
+        "btnPrimario",
+        "btnEnviar",
+    ):
+        assert ventana.findChild(ef.QWidget, nombre) is not None, nombre
+
+
+def test_cabecera_adapta_acciones_en_ancho_portatil():
+    ventana = ef.VentanaPrincipal()
+    ventana.show()
+    ventana.resize(1500, 900)
+    _app.processEvents()
+    assert not ventana.accion_abrir_cabecera.isHidden()
+    assert not ventana.accion_pegar_cabecera.isHidden()
+
+    ventana.resize(1000, 760)
+    _app.processEvents()
+
+    assert ventana.accion_abrir_cabecera.isHidden()
+    assert ventana.accion_pegar_cabecera.isHidden()
+    assert ventana.findChild(ef.QGroupBox, "masOpciones") is not None
+
+
+def test_flujo_completo_foto_pdf_y_apertura_de_aplifisa(tmp_path, monkeypatch):
+    ruta_pdf = tmp_path / "lote.pdf"
+    ejecutable = tmp_path / "FacturasAplifisa.exe"
+    ejecutable.write_bytes(b"")
+    aperturas = []
+    ventana = ef.VentanaPrincipal()
+    ventana._cargar_cv(_foto_documento())
+    ventana.anadir_pagina_pdf(ventana.procesada_full())
+    monkeypatch.setattr(ventana, "_elegir_ruta_pdf_lote", lambda: str(ruta_pdf))
+    monkeypatch.setattr(ventana, "_ejecutable_aplifisa", lambda: str(ejecutable))
+    monkeypatch.setattr(
+        ef, "lanzar_aplifisa", lambda exe, pdf: aperturas.append((exe, pdf))
+    )
+    monkeypatch.setattr(ef.QMessageBox, "information", lambda *args: None)
+
+    ventana.enviar_a_aplifisa()
+
+    assert ruta_pdf.read_bytes().startswith(b"%PDF")
+    assert aperturas == [(str(ejecutable), str(ruta_pdf))]
+
+
+def test_comprobacion_manual_de_actualizaciones_es_explicita(monkeypatch):
+    ventana = ef.VentanaPrincipal()
+    llamadas = []
+    monkeypatch.setattr(
+        ef.actualizador,
+        "conectar",
+        lambda destino, version, manual=False: llamadas.append(
+            (destino, version, manual)
+        ),
+    )
+
+    ventana.findChild(ef.QGroupBox, "masOpciones").setChecked(True)
+    ventana.btn_comprobar_actualizaciones.click()
+
+    assert llamadas == [(ventana, ef.__version__, True)]
+
+
+@pytest.mark.parametrize('cambio', ['rotar', 'sustituir'])
+def test_propuesta_tardia_no_recorta_pixeles_distintos(tmp_path, cambio):
+    ruta = _crear_fotos(tmp_path, 1)[0]
+    propuesta = calcular_precalculo(ruta)
+    ventana = ef.VentanaPrincipal()
+    ventana._cargar_archivo(ruta)
+    if cambio == 'rotar':
+        ventana.rotar_original(90)
+    else:
+        ventana._cargar_cv(cv2.resize(_foto_documento(), (700, 525)), ruta_actual=ruta)
+    # Un trabajo iniciado antes del cambio puede terminar después de él.
+    ventana._al_terminar_precalculo(propuesta)
+    puntos = ef.detectar_documento(ventana.imagen_original)
+    esperado = ef.corregir_perspectiva(ventana.imagen_original, puntos)
+
+    ventana.detectar_auto(silencioso=True)
+
+    assert np.array_equal(ventana.imagen_enderezada, esperado)
+
+
+@pytest.mark.parametrize('origen', ['archivo', 'pegada'])
+@pytest.mark.parametrize('recorte', ['manual', 'sin_recortar'])
+def test_sesion_recupera_pixeles_geometria_y_recorte(tmp_path, origen, recorte):
+    ventana = ef.VentanaPrincipal()
+    ruta = _crear_fotos(tmp_path, 1)[0] if origen == 'archivo' else ''
+    ventana._cargar_cv(_foto_documento(), ruta_actual=ruta)
+    ventana.rotar_original(90)
+    if recorte == 'manual':
+        puntos = [[120, 240], [800, 210], [810, 1180], [100, 1200]]
+        ventana.lienzo_original.mostrar_esquinas(puntos)
+        ventana._al_recibir_puntos_manuales(puntos)
+    else:
+        ventana.usar_sin_recortar()
+    original = ventana.imagen_original.copy()
+    esperado = ventana.procesada_full().copy()
+    puntos_antes = list(ventana.lienzo_original.puntos)
+    # Restaurar del último cambio, sin invocar un guardado artificial.
+    restaurada = ef.VentanaPrincipal()
+
+    assert np.array_equal(restaurada.imagen_original, original)
+    assert np.array_equal(restaurada.procesada_full(), esperado)
+    assert restaurada.lienzo_original.puntos == puntos_antes
+    assert (restaurada.imagen_enderezada is None) == (recorte == 'sin_recortar')
+    assert restaurada._ruta_actual == ruta
+
+
+def test_restaurar_nombre_perfil_no_reaplica_sus_valores(tmp_path):
+    from perfiles import PerfilEscaneo, guardar_perfil
+
+    guardar_perfil(PerfilEscaneo('Personalizado', 2, brillo=5, destino='perfil'))
+    ventana = ef.VentanaPrincipal()
+    ventana.combo_perfil.setCurrentText('Personalizado')
+    ventana.sld_brillo.setValue(27)
+    ventana.carpeta_salida = str(tmp_path / 'destino puntual')
+    ventana._guardar_sesion_actual()
+
+    restaurada = ef.VentanaPrincipal()
+
+    assert restaurada.combo_perfil.currentText() == 'Personalizado'
+    assert restaurada.sld_brillo.value() == 27
+    assert restaurada.carpeta_salida == str(tmp_path / 'destino puntual')
+
+
+def test_confirmar_y_avanzar_solo_persiste_el_estado_conjunto(tmp_path, monkeypatch):
+    import sesion_trabajo
+
+    ventana = ef.VentanaPrincipal()
+    rutas = _crear_fotos(tmp_path, 2)
+    ventana._iniciar_cola(rutas)
+    guardados = []
+    guardar_real = ef.guardar_sesion
+
+    def guardar(datos):
+        guardados.append(datos)
+        guardar_real(datos)
+
+    monkeypatch.setattr(ef, 'guardar_sesion', guardar)
+    ventana.terminar_y_siguiente()
+
+    assert len(guardados) == 1
+    assert guardados[0]['foto_actual'] == rutas[1]
+    assert len(guardados[0]['paginas']) == 1
+    assert guardados[0]['cola'] == []
+    assert sesion_trabajo.leer_sesion() == guardados[0]
+    restaurada = ef.VentanaPrincipal()
+    assert restaurada._ruta_actual == rutas[1]
+    assert restaurada.lista_pdf.count() == 1
+
+
+def test_ultima_foto_confirmada_no_se_vuelve_a_ofrecer(tmp_path, monkeypatch):
+    monkeypatch.setattr(ef.QMessageBox, 'information', lambda *args: None)
+    ventana = ef.VentanaPrincipal()
+    ventana._iniciar_cola(_crear_fotos(tmp_path, 1))
+
+    ventana.terminar_y_siguiente()
+    restaurada = ef.VentanaPrincipal()
+
+    assert restaurada.lista_pdf.count() == 1
+    assert restaurada.procesada_full() is None
+    assert restaurada._ruta_actual == ''
+
+
+def test_interrupcion_antes_del_avance_conserva_sesion_anterior(tmp_path, monkeypatch):
+    from sesion_trabajo import leer_sesion
+
+    ventana = ef.VentanaPrincipal()
+    ventana._iniciar_cola(_crear_fotos(tmp_path, 2))
+    anterior = leer_sesion()
+    def interrumpir():
+        raise RuntimeError('cierre inesperado')
+    monkeypatch.setattr(ventana, '_cargar_siguiente_de_cola', interrumpir)
+
+    with pytest.raises(RuntimeError, match='cierre inesperado'):
+        ventana.terminar_y_siguiente()
+
+    assert leer_sesion() == anterior
+
+
+def test_errores_saltados_siguen_accesibles_al_terminar_y_restaurar(tmp_path, monkeypatch):
+    monkeypatch.setattr(ef.QMessageBox, 'critical', lambda *args: None)
+    monkeypatch.setattr(ef.QMessageBox, 'information', lambda *args: None)
+    buena = _crear_fotos(tmp_path, 1)[0]
+    fallidas = [str(tmp_path / 'falta.png'), str(tmp_path / 'rota.png')]
+    ventana = ef.VentanaPrincipal()
+    ventana._iniciar_cola([buena, *fallidas])
+    ventana.terminar_y_siguiente()
+
+    assert ventana._ruta_actual == ''
+    assert ventana.procesada_full() is None
+    ventana._saltar_actual()
+    ventana._saltar_actual()
+    restaurada = ef.VentanaPrincipal()
+
+    assert restaurada.lista_pdf.count() == 1
+    assert not restaurada.grupo_cola.isHidden()
+    assert restaurada.btn_reintentar.isEnabled()
+    assert restaurada.combo_fallidas.count() == 2
+    assert restaurada.combo_fallidas.itemData(0) == fallidas[0]
+    assert restaurada.combo_fallidas.itemData(1) == fallidas[1]
+    assert restaurada._posiciones_fallidas == {fallidas[0]: 2, fallidas[1]: 3}
+
+    cv2.imwrite(fallidas[0], _foto_documento())
+    restaurada.combo_fallidas.setCurrentIndex(0)
+    restaurada.reintentar_actual()
+
+    assert restaurada._ruta_actual == fallidas[0]
+    assert restaurada.procesada_full() is not None
+    assert restaurada.combo_fallidas.count() == 1
+    assert restaurada.combo_fallidas.itemData(0) == fallidas[1]
+    assert restaurada.lista_pdf.count() == 1
